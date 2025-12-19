@@ -11,30 +11,6 @@ use std::{env, io};
 mod events;
 use libc::{MAP_SHARED, O_CREAT, O_EXCL, O_RDWR, PROT_READ, PROT_WRITE, c_char};
 
-const DISPLAY_OBJECT_ID: u32 = 1;
-const WL_REGISTRY_EVENT_GLOBAL: u16 = 0;
-const SHM_POOL_EVENT_FORMAT: u16 = 0;
-const WL_BUFFER_EVENT_RELEASE: u16 = 0;
-const XDG_WM_BASE_EVENT_PING: u16 = 3;
-const XDG_TOPLEVEL_EVENT_CONFIGURE: u16 = 0;
-const XDG_TOPLEVEL_EVENT_CLOSE: u16 = 1;
-const XDG_SURFACE_EVENT_CONFIGURE: u16 = 0;
-const WL_DISPLAY_GET_REGISTRY_OPCODE: u16 = 1;
-const WL_REGISTRY_BIND_OPCODE: u16 = 0;
-const WL_COMPOSITOR_CREATE_SURFACE_OPCODE: u16 = 0;
-const XDG_WM_BASE_PONG_OPCODE: u16 = 3;
-const XDG_SURFACE_ACK_CONFIGURE_OPCODE: u16 = 4;
-const WL_SHM_CREATE_POOL_OPCODE: u16 = 0;
-const XDG_WM_BASE_GET_XDG_SURFACE_OPCODE: u16 = 2;
-const WL_SHM_POOL_CREATE_BUFFER_OPCODE: u16 = 0;
-const WL_SURFACE_ATTACH_OPCODE: u16 = 1;
-const XDG_SURFACE_GET_TOPLEVEL_OPCODE: u16 = 1;
-const WL_SURFACE_COMMIT_OPCODE: u16 = 6;
-const WL_DISPLAY_ERROR_EVENT: u16 = 0;
-const FORMAT_XRGB8888: u16 = 1;
-const HEADER_SIZE: usize = 8;
-const COLOR_CHANNELS: u32 = 4;
-
 fn get_wayland_socket() -> io::Result<UnixStream> {
     let wayland_disp = env::var_os("WAYLAND_DISPLAY").unwrap_or("wayland-0".into());
     let runtime_dir = env::var_os("XDG_RUNTIME_DIR").unwrap_or("/tmp/".into());
@@ -188,7 +164,7 @@ impl State {
                     // header + name + string len + string + version + id
                     let total_len = Header::HEADER_SIZE + 4 + 4 + rounded_len + 4 + 4;
                     msg.write_u32(self.wl_registry); // wl_registry id
-                    msg.write_u16(WL_REGISTRY_BIND_OPCODE); // bind opcode
+                    msg.write_u16(0); // bind opcode
                     msg.write_u16(total_len as u16);
                     msg.write_u32(name); // wayland xml still hasn't been updated ??
                     msg.write_str(&interface);
@@ -233,7 +209,7 @@ impl State {
         {
             let mut msg = Message::<256>::empty();
             msg.write_u32(self.wl_compositor);
-            msg.write_u16(WL_COMPOSITOR_CREATE_SURFACE_OPCODE);
+            msg.write_u16(0);
             msg.write_u16(12);
             self.wl_surface = ID_COUNTER.get_new();
             msg.write_u32(self.wl_surface);
@@ -270,7 +246,7 @@ impl State {
         {
             let mut msg = Message::<256>::empty();
             msg.write_u32(self.wl_compositor);
-            msg.write_u16(WL_COMPOSITOR_CREATE_SURFACE_OPCODE);
+            msg.write_u16(0);
             msg.write_u16(12);
             self.wl_surface = ID_COUNTER.get_new();
             msg.write_u32(self.wl_surface);
@@ -285,7 +261,7 @@ impl State {
         {
             let mut msg = Message::<256>::empty();
             msg.write_u32(self.xdg_wm_base);
-            msg.write_u16(XDG_WM_BASE_GET_XDG_SURFACE_OPCODE);
+            msg.write_u16(2);
             msg.write_u16(16);
             self.xdg_surface = ID_COUNTER.get_new();
             msg.write_u32(self.xdg_surface);
@@ -301,7 +277,7 @@ impl State {
         {
             let mut msg = Message::<256>::empty();
             msg.write_u32(self.xdg_surface);
-            msg.write_u16(XDG_SURFACE_GET_TOPLEVEL_OPCODE);
+            msg.write_u16(1);
             msg.write_u16(12);
             self.xdg_toplevel = ID_COUNTER.get_new();
             msg.write_u32(self.xdg_toplevel);
@@ -321,7 +297,7 @@ impl State {
         {
             let mut msg = Message::<256>::empty();
             msg.write_u32(self.wl_surface);
-            msg.write_u16(WL_SURFACE_COMMIT_OPCODE);
+            msg.write_u16(6);
             msg.write_u16(8);
             socket.write(msg.data());
             socket.flush();
@@ -343,7 +319,7 @@ impl State {
                 );
                 let mut msg = Message::<256>::empty();
                 msg.write_u32(self.xdg_wm_base);
-                msg.write_u16(XDG_WM_BASE_EVENT_PING);
+                msg.write_u16(3);
                 msg.write_u16(12);
                 msg.write_u32(serial);
                 socket.write(msg.data());
@@ -369,7 +345,7 @@ impl State {
                 println!("\x1b[32m[DEBUG]\x1b[0m: => xdg_surface#{}.configure(serial: {})", self.xdg_surface, serial);
                 let mut msg = Message::<256>::empty();
                 msg.write_u32(self.xdg_surface);
-                msg.write_u16(XDG_SURFACE_ACK_CONFIGURE_OPCODE);
+                msg.write_u16(4);
                 msg.write_u16(12);
                 msg.write_u32(serial);
                 socket.write(msg.data());
@@ -414,7 +390,7 @@ impl State {
     fn create_wl_shm_pool(&mut self, socket: &mut UnixStream) {
         let mut msg = Message::<256>::empty();
         msg.write_u32(self.wl_shm);
-        msg.write_u16(WL_SHM_POOL_CREATE_BUFFER_OPCODE);
+        msg.write_u16(0);
         msg.write_u16(20);
         self.wl_shm_pool = ID_COUNTER.get_new();
         msg.write_u32(self.wl_shm_pool);
@@ -446,7 +422,7 @@ impl State {
     fn wl_surface_attach(&mut self, socket: &mut UnixStream) {
         let mut msg = Message::<256>::empty();
         msg.write_u32(self.wl_surface);
-        msg.write_u16(WL_SURFACE_ATTACH_OPCODE);
+        msg.write_u16(1);
         msg.write_u16(20);
         msg.write_u32(self.wl_buffer);
         msg.write_u32(0);
@@ -646,8 +622,8 @@ fn wl_get_registry(sock: &mut UnixStream) -> u32 {
     let mut msg = Message::<128>::empty();
     let reg_id = ID_COUNTER.get_new();
 
-    msg.write_u32(DISPLAY_OBJECT_ID);
-    msg.write_u16(WL_DISPLAY_GET_REGISTRY_OPCODE);
+    msg.write_u32(1);
+    msg.write_u16(1);
     msg.write_u16(12);
     msg.write_u32(reg_id);
     let _ = sock.write(msg.data());
@@ -664,7 +640,7 @@ fn main() -> io::Result<()> {
         wl_registry: wl_get_registry(&mut socket),
         height: 150,
         width: 117,
-        stride: COLOR_CHANNELS,
+        stride: 4,
         ..Default::default()
     };
     // state.init_shm();
