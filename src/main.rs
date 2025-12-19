@@ -45,34 +45,47 @@ fn roundup(value: usize, mul: usize) -> usize {
 #[derive(Debug)]
 struct Message<const S: usize> {
     buf: [u8; S],
-    size: usize,
+    len: usize,
 }
 
 impl<const S: usize> Message<S> {
+    pub fn new(id: u32, op: u16) -> Self {
+        let mut msg = Message::empty();
+        msg.write_u32(id);
+        msg.write_u16(op);
+        msg.write_u16(8);
+        msg
+    }
+    fn update_len(&mut self) {
+        self.buf[6..8].copy_from_slice(&(self.len as u16).to_ne_bytes());
+    }
     pub fn empty() -> Self {
         Self {
             buf: [0; S],
-            size: 0,
+            len: 0,
         }
     }
     pub fn write_u32(&mut self, value: u32) {
         const SIZE: usize = size_of::<u32>();
-        self.buf[self.size..self.size + SIZE].copy_from_slice(&value.to_ne_bytes());
-        self.size += SIZE;
+        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
+        self.len += SIZE;
+        self.update_len();
     }
     pub fn write_u16(&mut self, value: u16) {
         const SIZE: usize = size_of::<u16>();
-        self.buf[self.size..self.size + SIZE].copy_from_slice(&value.to_ne_bytes());
-        self.size += SIZE;
+        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
+        self.len += SIZE;
+        self.update_len();
     }
     pub fn data(&self) -> &[u8] {
-        &self.buf[..self.size]
+        &self.buf[..self.len]
     }
     pub fn write_str(&mut self, str: &str) {
         // null included
         self.write_u32((str.len() + 1) as u32);
-        self.buf[self.size..str.len() + self.size].copy_from_slice(str.as_bytes());
-        self.size += roundup(str.len() + 1, 4);
+        self.buf[self.len..str.len() + self.len].copy_from_slice(str.as_bytes());
+        self.len += roundup(str.len() + 1, 4);
+        self.update_len();
     }
 }
 
@@ -157,14 +170,8 @@ impl State {
                 );
 
                 let mut bind_reg = |name: u32, interface: &str, version: u32| -> u32 {
-                    let mut msg = Message::<64>::empty();
-                    let rounded_len = roundup(interface.len() + 1, 4);
-                    // header + name + string len + string + version + id
-                    let total_len = Header::HEADER_SIZE + 4 + 4 + rounded_len + 4 + 4;
-                    msg.write_u32(self.wl_registry); // wl_registry id
-                    msg.write_u16(0); // bind opcode
-                    msg.write_u16(total_len as u16);
-                    msg.write_u32(name); // wayland xml still hasn't been updated ??
+                    let mut msg = Message::<64>::new(self.wl_registry, 0);
+                    msg.write_u32(name);
                     msg.write_str(&interface);
                     msg.write_u32(version);
                     let new_id = ID_COUNTER.get_new();
@@ -198,35 +205,29 @@ impl State {
     }
 
     fn init(&mut self, socket: &mut UnixStream) {
-        // create wl_surface
         {
-            let mut msg = Message::<12>::empty();
-            msg.write_u32(self.wl_compositor);
-            msg.write_u16(0);
-            msg.write_u16(12);
+            let mut msg = Message::<12>::new(self.wl_compositor, 0);
             self.wl_surface = ID_COUNTER.get_new();
             msg.write_u32(self.wl_surface);
             socket.write(msg.data());
-            println!("\x1b[32m[DEBUG]\x1b[0m: Created wl_surface with id #{}", self.wl_surface);
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: Created wl_surface with id #{}",
+                self.wl_surface
+            );
         }
-        // create xdg_surface
         {
-            let mut msg = Message::<16>::empty();
-            msg.write_u32(self.xdg_wm_base);
-            msg.write_u16(2);
-            msg.write_u16(16);
+            let mut msg = Message::<16>::new(self.xdg_wm_base, 2);
             self.xdg_surface = ID_COUNTER.get_new();
             msg.write_u32(self.xdg_surface);
             msg.write_u32(self.wl_surface);
             socket.write(msg.data());
-            println!("\x1b[32m[DEBUG]\x1b[0m: Created xdg_surface with id #{}", self.xdg_surface);
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: Created xdg_surface with id #{}",
+                self.xdg_surface
+            );
         }
-        // create toplevel
         {
-            let mut msg = Message::<12>::empty();
-            msg.write_u32(self.xdg_surface);
-            msg.write_u16(1);
-            msg.write_u16(12);
+            let mut msg = Message::<12>::new(self.xdg_surface, 1);
             self.xdg_toplevel = ID_COUNTER.get_new();
             msg.write_u32(self.xdg_toplevel);
             socket.write(msg.data());
@@ -236,25 +237,22 @@ impl State {
                 self.xdg_toplevel
             );
         }
-        // Set title
         self.wl_surface_commit(socket);
     }
 
     fn wl_surface_commit(&mut self, socket: &mut UnixStream) {
-        // Commit wl_surface
         {
-            let mut msg = Message::<8>::empty();
-            msg.write_u32(self.wl_surface);
-            msg.write_u16(6);
-            msg.write_u16(8);
+            let mut msg = Message::<8>::new(self.wl_surface, 6);
             socket.write(msg.data());
             socket.flush();
-            println!("\x1b[32m[DEBUG]\x1b[0m: wl_surface#{}.commit()", self.wl_surface);
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: wl_surface#{}.commit()",
+                self.wl_surface
+            );
         }
     }
     fn on_xdgbase_event(&self, socket: &mut UnixStream, event: Event<'_>) {
         match event.header.opcode {
-            // Pong
             0 => {
                 let mut parser = EventDataParser::new(event.data);
                 let serial = parser.get_u32();
@@ -262,10 +260,7 @@ impl State {
                     "\x1b[32m[DEBUG]\x1b[0m: => xdg_wm_base#{}.ping(serial: {})",
                     self.xdg_wm_base, serial
                 );
-                let mut msg = Message::<12>::empty();
-                msg.write_u32(self.xdg_wm_base);
-                msg.write_u16(3);
-                msg.write_u16(12);
+                let mut msg = Message::<12>::new(self.xdg_wm_base, 3);
                 msg.write_u32(serial);
                 socket.write(msg.data());
                 socket.flush();
@@ -284,14 +279,10 @@ impl State {
     fn on_xdgsurface_event(&mut self, socket: &mut UnixStream, event: Event<'_>) {
         let mut parser = EventDataParser::new(event.data);
         match event.header.opcode {
-            // configure
             0 => {
                 let serial = parser.get_u32();
                 println!("\x1b[32m[DEBUG]\x1b[0m: => xdg_surface#{}.configure(serial: {})", self.xdg_surface, serial);
-                let mut msg = Message::<12>::empty();
-                msg.write_u32(self.xdg_surface);
-                msg.write_u16(4);
-                msg.write_u16(12);
+                let mut msg = Message::<12>::new(self.xdg_surface, 4);
                 msg.write_u32(serial);
                 socket.write(msg.data());
                 socket.flush();
@@ -306,25 +297,21 @@ impl State {
     fn on_toplevel_event(&mut self, socket: &mut UnixStream, event: Event<'_>) {
         let mut parser = EventDataParser::new(event.data);
         match event.header.opcode {
-            // Configure
             0 => {
                 let width = parser.get_u32();
                 let height = parser.get_u32();
                 let states = parser.get_array_u32();
                 println!("\x1b[32m[DEBUG]\x1b[0m: => xdg_toplevel#{}.configure(width: {}, height: {}, states: {:?})", self.xdg_toplevel, width, height, states);
             }
-            // Close
             1 => {
                 println!("\x1b[32m[DEBUG]\x1b[0m: => xdg_toplevel#{}.close()", self.xdg_toplevel);
                 self.exit = true;
             }
-            // Configure bounds
             2 => {
                 let width = parser.get_u32();
                 let height = parser.get_u32();
                 println!("\x1b[32m[DEBUG]\x1b[0m: => xdg_toplevel#{}.configure_bounds(width: {}, height: {})", self.xdg_toplevel, width, height);
             }
-            // wm_capabalites
             3 => {
                 println!("\x1b[32m[DEBUG]\x1b[0m: => xdg_toplevel#{}.wm_capabalites(capabalites: {:?})", self.xdg_toplevel, parser.get_array_u32());
             }
@@ -333,10 +320,7 @@ impl State {
     }
 
     fn create_wl_shm_pool(&mut self, socket: &mut UnixStream) {
-        let mut msg = Message::<20>::empty();
-        msg.write_u32(self.wl_shm);
-        msg.write_u16(0);
-        msg.write_u16(20);
+        let mut msg = Message::<20>::new(self.wl_shm, 0);
         self.wl_shm_pool = ID_COUNTER.get_new();
         msg.write_u32(self.wl_shm_pool);
         msg.write_u32(self.shm_fd as u32);
@@ -346,13 +330,11 @@ impl State {
     }
 
     fn create_wl_buffer(&mut self, socket: &mut UnixStream) {
-        let mut msg = Message::<28>::empty();
-        msg.write_u32(self.wl_shm_pool);
-        msg.write_u16(1);
-        msg.write_u16(28);
+        // TODO: use wl_shm_pool actually
+        let mut msg = Message::<28>::new(self.wl_shm_pool, 1);
         self.wl_buffer = ID_COUNTER.get_new();
         msg.write_u32(self.wl_buffer);
-        msg.write_u32((u32::MAX / 255) * 75 );
+        msg.write_u32((u32::MAX / 255) * 75);
         msg.write_u32((u32::MAX / 255) * 109);
         msg.write_u32((u32::MAX / 255) * 145);
         msg.write_u32(u32::MAX);
@@ -365,10 +347,7 @@ impl State {
     }
 
     fn wl_surface_attach(&mut self, socket: &mut UnixStream) {
-        let mut msg = Message::<20>::empty();
-        msg.write_u32(self.wl_surface);
-        msg.write_u16(1);
-        msg.write_u16(20);
+        let mut msg = Message::<20>::new(self.wl_surface, 1);
         msg.write_u32(self.wl_buffer);
         msg.write_u32(0);
         msg.write_u32(0);
@@ -382,12 +361,8 @@ impl State {
 
     fn set_toplevel_info(&self, socket: &mut UnixStream) {
         {
-            let mut msg = Message::<64>::empty();
-            msg.write_u32(self.xdg_toplevel);
+            let mut msg = Message::<64>::new(self.xdg_toplevel, 2);
             let title = "YAY first wayland app";
-            let rounded_len = roundup(title.len() + 1, 4) as u16;
-            msg.write_u16(2);
-            msg.write_u16(rounded_len + 8 + 4);
             msg.write_str(title);
             socket.write(msg.data());
             println!(
@@ -396,12 +371,8 @@ impl State {
             );
         }
         {
-            let mut msg = Message::<64>::empty();
-            msg.write_u32(self.xdg_toplevel);
+            let mut msg = Message::<64>::new(self.xdg_toplevel, 3);
             let class = "com.github.evillary";
-            let rounded_len = roundup(class.len() + 1, 4) as u16;
-            msg.write_u16(3);
-            msg.write_u16(rounded_len + 8 + 4);
             msg.write_str(class);
             socket.write(msg.data());
             println!(
@@ -427,7 +398,24 @@ impl State {
             }
             1 => {
                 let obj_id = parser.get_u32();
-                println!("\x1b[32m[DEBUG]\x1b[0m: wl_display#1.delete_id(id: {})", obj_id);
+                println!(
+                    "\x1b[32m[DEBUG]\x1b[0m: wl_display#1.delete_id(id: {})",
+                    obj_id
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn on_wlshm_event(&mut self, socket: &mut UnixStream, event: Event<'_>) {
+        let mut parser = EventDataParser::new(event.data);
+        match event.header.opcode {
+            0 => {
+                let format = parser.get_u32();
+                println!(
+                    "\x1b[32m[DEBUG]\x1b[0m: => wl_shm#{}.format(format: 0x{:08x})",
+                    self.wl_shm, format
+                );
             }
             _ => {}
         }
@@ -445,12 +433,8 @@ impl Drop for State {
 }
 
 fn wl_get_registry(sock: &mut UnixStream) -> u32 {
-    let mut msg = Message::<128>::empty();
+    let mut msg = Message::<128>::new(1, 1);
     let reg_id = ID_COUNTER.get_new();
-
-    msg.write_u32(1);
-    msg.write_u16(1);
-    msg.write_u16(12);
     msg.write_u32(reg_id);
     let _ = sock.write(msg.data());
     let _ = sock.flush();
@@ -483,11 +467,10 @@ fn main() -> io::Result<()> {
         while let Some(event) = event_iter.next() {
             if event.header.id == state.wl_registry {
                 state.on_registry_event(&mut socket, event);
-            } else if event.header.id == state.wl_compositor {
             } else if event.header.id == state.xdg_wm_base {
                 state.on_xdgbase_event(&mut socket, event);
             } else if event.header.id == state.wl_shm {
-                // println!("WL_SHM: {}", event.data.escape_ascii());
+                state.on_wlshm_event(&mut socket, event);
             } else if event.header.id == state.xdg_toplevel {
                 state.on_toplevel_event(&mut socket, event);
             } else if event.header.id == state.xdg_surface {
