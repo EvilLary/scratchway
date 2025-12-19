@@ -177,7 +177,6 @@ impl State {
                     let new_id = ID_COUNTER.get_new();
                     msg.write_u32(new_id);
                     socket.write(msg.data());
-                    socket.flush();
                     println!(
                         "\x1b[32m[DEBUG]\x1b[0m: wl_registry#2.bind(name: {}, interface: {}, version: {})",
                         name, interface, version
@@ -231,7 +230,6 @@ impl State {
             self.xdg_toplevel = ID_COUNTER.get_new();
             msg.write_u32(self.xdg_toplevel);
             socket.write(msg.data());
-            socket.flush();
             println!(
                 "\x1b[32m[DEBUG]\x1b[0m: Created xdg_toplevel with id #{}",
                 self.xdg_toplevel
@@ -244,7 +242,6 @@ impl State {
         {
             let mut msg = Message::<8>::new(self.wl_surface, 6);
             socket.write(msg.data());
-            socket.flush();
             println!(
                 "\x1b[32m[DEBUG]\x1b[0m: wl_surface#{}.commit()",
                 self.wl_surface
@@ -263,7 +260,6 @@ impl State {
                 let mut msg = Message::<12>::new(self.xdg_wm_base, 3);
                 msg.write_u32(serial);
                 socket.write(msg.data());
-                socket.flush();
                 println!(
                     "\x1b[32m[DEBUG]\x1b[0m: xdg_wm_base#{}.pong(serial: {})",
                     self.xdg_wm_base, serial
@@ -285,7 +281,6 @@ impl State {
                 let mut msg = Message::<12>::new(self.xdg_surface, 4);
                 msg.write_u32(serial);
                 socket.write(msg.data());
-                socket.flush();
                 println!("\x1b[32m[DEBUG]\x1b[0m: xdg_surface#{}.ack_configure(serial: {})", self.xdg_surface, serial);
                 self.state = AppState::SurfaceAckedConfigure;
             }
@@ -326,7 +321,6 @@ impl State {
         msg.write_u32(self.shm_fd as u32);
         msg.write_u32(self.shm_pool_size);
         socket.write(msg.data());
-        socket.flush();
     }
 
     fn create_wl_buffer(&mut self, socket: &mut UnixStream) {
@@ -343,7 +337,6 @@ impl State {
             self.wl_buffer, 20, 50, 150, 1,
         );
         socket.write(msg.data());
-        socket.flush();
     }
 
     fn wl_surface_attach(&mut self, socket: &mut UnixStream) {
@@ -356,7 +349,6 @@ impl State {
             self.wl_surface, self.wl_buffer, 0, 0
         );
         socket.write(msg.data());
-        socket.flush();
     }
 
     fn set_toplevel_info(&self, socket: &mut UnixStream) {
@@ -380,7 +372,6 @@ impl State {
                 self.xdg_toplevel, class
             );
         }
-        socket.flush();
     }
 
     fn on_display_event(&mut self, socket: &mut UnixStream, event: Event<'_>) {
@@ -479,6 +470,7 @@ fn main() -> io::Result<()> {
                 state.on_display_event(&mut socket, event);
             }
         }
+        socket.flush();
 
         if state.wl_compositor != 0
             && state.wl_shm != 0
