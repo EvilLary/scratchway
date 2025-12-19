@@ -113,6 +113,8 @@ struct State {
     wl_registry: u32,
     wl_shm: u32,
     wl_shm_pool: u32,
+    wl_layer_shell_mgr: u32,
+    wl_layer_surface: u32,
     wl_buffer: u32,
     xdg_wm_base: u32,
     xdg_surface: u32,
@@ -214,10 +216,52 @@ impl State {
                     "wp_single_pixel_buffer_manager_v1" => {
                         self.wl_shm_pool = bind_reg(name, &interface, version);
                     }
+                    "zwlr_layer_shell_v1" => {
+                        self.wl_layer_shell_mgr = bind_reg(name, &interface, version);
+                    }
+                    // "wl_seat" => {
+                    //     let _seat = bind_reg(name, &interface, version);
+                    // }
                     _ => {}
                 }
             }
             _ => {}
+        }
+    }
+
+    fn create_layer_surface(&mut self, socket: &mut UnixStream) {
+        {
+            let mut msg = Message::<256>::empty();
+            msg.write_u32(self.wl_compositor);
+            msg.write_u16(WL_COMPOSITOR_CREATE_SURFACE_OPCODE);
+            msg.write_u16(12);
+            self.wl_surface = ID_COUNTER.get_new();
+            msg.write_u32(self.wl_surface);
+            socket.write(msg.data());
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: Created wl_surface with id #{}",
+                self.wl_surface
+            );
+        }
+        {
+            let mut msg = Message::<256>::empty();
+            msg.write_u32(self.wl_layer_shell_mgr);
+            msg.write_u16(0); //get_layer_surface
+            let namespace = "com.github.evillary";
+            let rounded_len = roundup(namespace.len() + 1, 4) as u16;
+            msg.write_u16(8 + 4 + 4 + 4 + 4 + 4 + rounded_len);
+            self.wl_layer_surface = ID_COUNTER.get_new();
+            msg.write_u32(self.wl_layer_surface);
+            msg.write_u32(self.wl_surface); // surface
+            msg.write_u32(0); // output
+            msg.write_u32(2); // layer
+            msg.write_str(namespace); // namespace
+            socket.write(msg.data());
+            socket.flush();
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: Created wl_layer_surface with id #{}",
+                self.wl_layer_surface
+            );
         }
     }
 
@@ -232,7 +276,10 @@ impl State {
             msg.write_u32(self.wl_surface);
             socket.write(msg.data());
             socket.flush();
-            println!("\x1b[32m[DEBUG]\x1b[0m: Created wl_surface with id #{}", self.wl_surface);
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: Created wl_surface with id #{}",
+                self.wl_surface
+            );
         }
         // create xdg_surface
         {
@@ -245,7 +292,10 @@ impl State {
             msg.write_u32(self.wl_surface);
             socket.write(msg.data());
             socket.flush();
-            println!("\x1b[32m[DEBUG]\x1b[0m: Created xdg_surface with id #{}", self.xdg_surface);
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: Created xdg_surface with id #{}",
+                self.xdg_surface
+            );
         }
         // create toplevel
         {
@@ -275,7 +325,10 @@ impl State {
             msg.write_u16(8);
             socket.write(msg.data());
             socket.flush();
-            println!("\x1b[32m[DEBUG]\x1b[0m: wl_surface#{}.commit()", self.wl_surface);
+            println!(
+                "\x1b[32m[DEBUG]\x1b[0m: wl_surface#{}.commit()",
+                self.wl_surface
+            );
         }
     }
     fn on_xdgbase_event(&self, socket: &mut UnixStream, event: Event<'_>) {
@@ -378,7 +431,7 @@ impl State {
         msg.write_u16(28);
         self.wl_buffer = ID_COUNTER.get_new();
         msg.write_u32(self.wl_buffer);
-        msg.write_u32((u32::MAX / 255) * 75 );
+        msg.write_u32((u32::MAX / 255) * 75);
         msg.write_u32((u32::MAX / 255) * 109);
         msg.write_u32((u32::MAX / 255) * 145);
         msg.write_u32(u32::MAX);
@@ -446,17 +499,138 @@ impl State {
                 let code = parser.get_u32();
                 let msg = parser.get_string();
                 println!(
-                    "\x1b[30m[ERROR]\x1b[0m: Fatel error from object#{}, code: {}, message: {}",
+                    "\x1b[31m[ERROR]\x1b[0m: Fatel error from object#{}, code: {}, message: {}",
                     obj_id, code, msg
                 );
                 self.exit = true
             }
             1 => {
                 let obj_id = parser.get_u32();
-                println!("\x1b[32m[DEBUG]\x1b[0m: wl_display#1.delete_id(id: {})", obj_id);
+                println!(
+                    "\x1b[32m[DEBUG]\x1b[0m: => wl_display#1.delete_id(id: {})",
+                    obj_id
+                );
             }
             _ => {}
         }
+    }
+
+    fn on_layersurface_event(&mut self, socket: &mut UnixStream, event: Event<'_>) {
+        match event.header.opcode {
+            0 => {
+                let mut parser = EventDataParser::new(event.data);
+                let serial = parser.get_u32();
+                let width = parser.get_u32();
+                let height = parser.get_u32();
+                println!(
+                    "\x1b[32m[DEBUG]\x1b[0m: => wl_layer_surface#{}.configure(serial: {}, width: {}, height: {})",
+                    self.wl_layer_surface, serial, width, height
+                );
+
+                {
+                    let mut msg = Message::<12>::empty();
+                    msg.write_u32(self.wl_layer_surface);
+                    msg.write_u16(6); // set_size
+                    msg.write_u16(12); // len
+                    msg.write_u32(serial); // w
+                    println!(
+                        "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_layer_surface#{}.ack_configure(serial {})",
+                        self.wl_layer_surface, serial
+                    );
+                    socket.write(msg.data());
+                }
+                self.wl_surface_attach(socket);
+                self.wl_surface_commit(socket);
+            }
+            1 => {
+                println!(
+                    "\x1b[32m[DEBUG]\x1b[0m: => wl_layer_surface#{}.closed()",
+                    self.wl_layer_surface
+                );
+                self.exit = true
+            }
+            _ => {}
+        }
+    }
+
+    fn configure_layer(&mut self, socket: &mut UnixStream) {
+        {
+            let mut msg = Message::<16>::empty();
+            msg.write_u32(self.wl_layer_surface);
+            msg.write_u16(0); // set_size
+            msg.write_u16(16); // len
+            msg.write_u32(50); // w
+            msg.write_u32(1080); // w
+            println!(
+                "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_layer_surface#{}.set_size(width: {}, height: {})",
+                self.wl_layer_surface, 50, 1080
+            );
+            socket.write(msg.data());
+        }
+        {
+            let mut msg = Message::<12>::empty();
+            msg.write_u32(self.wl_layer_surface);
+            msg.write_u16(1); // set_anchor
+            msg.write_u16(12); // len
+            msg.write_u32(7); // anchor
+            println!(
+                "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_layer_surface#{}.set_anchor(anchor: {})",
+                self.wl_layer_surface, 7
+            );
+            socket.write(msg.data());
+        }
+        {
+            let mut msg = Message::<12>::empty();
+            msg.write_u32(self.wl_layer_surface);
+            msg.write_u16(2); // set_exclusive_zone
+            msg.write_u16(12); // len
+            msg.write_u32(50);
+            println!(
+                "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_layer_surface#{}.set_exclusive_zone(zone: {})",
+                self.wl_layer_surface, 0
+            );
+            socket.write(msg.data());
+        }
+        {
+            let mut msg = Message::<24>::empty();
+            msg.write_u32(self.wl_layer_surface);
+            msg.write_u16(3); // set_margin
+            msg.write_u16(24); // len
+            msg.write_u32(0);
+            msg.write_u32(0);
+            msg.write_u32(0);
+            msg.write_u32(0);
+            println!(
+                "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_layer_surface#{}.set_margin(t: {}, r: {}, b: {}, l: {})",
+                self.wl_layer_surface, 0, 0, 0, 0
+            );
+            socket.write(msg.data());
+        }
+        {
+            let mut msg = Message::<12>::empty();
+            msg.write_u32(self.wl_layer_surface);
+            msg.write_u16(4); // set_set_keyboard_interactivity
+            msg.write_u16(12); // len
+            msg.write_u32(0);
+            println!(
+                "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_layer_surface#{}.set_keyboard_interactivity(keyboard_interactivity: {})",
+                self.wl_layer_surface, 0,
+            );
+            socket.write(msg.data());
+        }
+        // {
+        //     let mut msg = Message::<32>::empty();
+        //     msg.write_u32(self.wl_layer_surface);
+        //     msg.write_u16(3); // set_set_keyboard_interactivity
+        //     msg.write_u16(12); // len
+        //     msg.write_u32(0);
+        //     println!(
+        //         "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_layer_surface#{}.set_keyboard_interactivity(keyboard_interactivity: {})",
+        //         self.wl_layer_surface, 0,
+        //     );
+        //     socket.write(msg.data());
+        // }
+        self.wl_surface_commit(socket);
     }
 }
 
@@ -518,29 +692,50 @@ fn main() -> io::Result<()> {
                 state.on_xdgsurface_event(&mut socket, event);
             } else if event.header.id == 1 {
                 state.on_display_event(&mut socket, event);
+            } else if event.header.id == state.wl_layer_surface {
+                state.on_layersurface_event(&mut socket, event);
+            } else {
+                println!("{:?}", event.header);
             }
         }
 
         if state.wl_compositor != 0
             && state.wl_shm != 0
-            && state.xdg_wm_base != 0
+            && state.wl_layer_shell_mgr != 0
             && state.wl_surface == 0
         {
-            state.init(&mut socket);
+            state.create_layer_surface(&mut socket);
         }
 
-        if state.state == AppState::SurfaceAckedConfigure && !state.mapped {
-            // if state.wl_shm_pool == 0 {
-            //     state.create_wl_shm_pool(&mut socket);
-            // }
+        if !state.mapped && state.wl_layer_surface != 0 {
             if state.wl_buffer == 0 {
                 state.create_wl_buffer(&mut socket);
             }
-            state.wl_surface_attach(&mut socket);
-            state.set_toplevel_info(&mut socket);
-            state.wl_surface_commit(&mut socket);
-            state.mapped = true
+            state.configure_layer(&mut socket);
+            state.mapped = true;
+            // state.wl_surface_attach(&mut socket);
+            // state.wl_surface_commit(&mut socket);
         }
+        // if state.wl_compositor != 0
+        //     && state.wl_shm != 0
+        //     && state.xdg_wm_base != 0
+        //     && state.wl_surface == 0
+        // {
+        //     state.init(&mut socket);
+        // }
+
+        // if state.state == AppState::SurfaceAckedConfigure && !state.mapped {
+        //     // if state.wl_shm_pool == 0 {
+        //     //     state.create_wl_shm_pool(&mut socket);
+        //     // }
+        //     if state.wl_buffer == 0 {
+        //         state.create_wl_buffer(&mut socket);
+        //     }
+        //     state.wl_surface_attach(&mut socket);
+        //     state.set_toplevel_info(&mut socket);
+        //     state.wl_surface_commit(&mut socket);
+        //     state.mapped = true
+        // }
 
         if (state.exit) {
             break;
