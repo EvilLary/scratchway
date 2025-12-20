@@ -1,15 +1,17 @@
 #![allow(unused)]
 
-use events::*;
-use std::cell::Cell;
-use std::ffi::{c_void, CString};
-use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
-use std::{env, io};
+use std::{
+    cell::Cell,
+    env,
+    ffi::{CString, c_void},
+    io::{self, Read, Write},
+    os::{
+        fd::{AsRawFd, OwnedFd},
+        unix::net::UnixStream,
+    },
+    sync::atomic::AtomicBool,
+};
 
 use crate::events::*;
 
@@ -18,6 +20,10 @@ use libc::{
     CMSG_DATA, CMSG_FIRSTHDR, CMSG_LEN, CMSG_SPACE, MAP_SHARED, O_CREAT, O_EXCL, O_RDWR, PROT_READ,
     PROT_WRITE, SCM_RIGHTS, SOL_SOCKET, c_char, c_int, cmsghdr, iovec, msghdr, sendmsg,
 };
+
+// struct Connection {
+//     socket: UnixStream,
+// }
 
 fn get_wayland_socket() -> io::Result<UnixStream> {
     let wayland_disp = env::var_os("WAYLAND_DISPLAY").unwrap_or("wayland-0".into());
@@ -889,9 +895,9 @@ fn main() -> io::Result<()> {
 
     let mut state = State {
         wl_registry: wl_get_registry(&mut socket),
-        height: 500,
-        width: 500,
-        stride: 4 * 500, // bytes per row
+        height: 800,
+        width: 800,
+        stride: 4 * 800, // bytes per row
         ..Default::default()
     };
 
@@ -932,6 +938,63 @@ fn main() -> io::Result<()> {
             *cell = (r << 16) | (g << 8) | b;
         }
     }
+
+    struct Rect {
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+    };
+
+    // let rect = Rect {
+    //     x: 50,
+    //     y: 50,
+    //     w: 100,
+    //     h: 100,
+    // };
+    //
+    // for (y, row) in &mut pixels
+    //     [rect.y * (state.width as usize)..(rect.y + rect.h) * (state.width as usize)]
+    //     .chunks_mut(state.width as usize)
+    //     .skip(rect.y).enumerate()
+    // {
+    //     for p in &mut row[rect.x..rect.x + rect.w] {
+    //         *p = 0xFFff0F;
+    //     }
+    // }
+    // for (y, row) in pixels
+    //     .chunks_mut(state.width as usize)
+    //     .skip(rect.y)
+    //     .enumerate()
+    // {
+    //     for p in &mut row[rect.x..rect.x + rect.w] {
+    //         *p = 0xFF00FF;
+    //     }
+    // }
+    // for p in pixels
+    //     .iter_mut()
+    //     .skip((rect.y * (state.width as usize)) + rect.x)
+    // {
+    //     *p = 0xFF00FF;
+    // }
+    // for (y, row) in pixels.chunks_mut(w).enumerate() {
+    //     for (x, cell) in row.iter_mut().enumerate() {
+    //         // let dx: i32 = cx as i32 - x as i32;
+    //         // let dy: i32 = cy as i32 - y as i32;
+    //         // let color = if dx * dx + dy * dy < 4900 { 0xFFB321 } else { 0x96ABC1 };
+    //         // *cell = color;
+    //         let r = ((x * 255) / w) as u32;
+    //         let g = 0;
+    //         // let g = (((x + w) / h) * 255) as u32;
+    //         let b = ((y * 255) / h) as u32;
+    //         // let g = ((y * 255) / w) as u32;
+    //         // let b = 0;
+    //         // let r = ((x / (w - 1)) * 255) as u32;
+    //         // let g = ((y / (h - 1)) * 255) as u32;
+    //         *cell = (r << 16) | (g << 8) | b;
+    //     }
+    // }
+
     let mut buf = [0u8; 4096];
     while let Ok(read) = socket.read(&mut buf) {
         if (read == 0) {
