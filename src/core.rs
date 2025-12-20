@@ -216,7 +216,7 @@ impl WlSeat {
         WlKeyboard::from_id(id)
     }
 
-    pub fn release(self, conn: &mut Connection) {
+    pub fn release(&self, conn: &mut Connection) {
         let mut msg = Message::<8>::new(self.id, Self::RELEASE_OP);
         conn.write_request(msg.data());
     }
@@ -296,7 +296,7 @@ impl WlKeyboard {
         }
     }
 
-    pub fn release(self, conn: &Connection) {
+    pub fn release(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::RELEASE_OP);
         conn.write_request(msg.data());
     }
@@ -394,7 +394,7 @@ impl WlCompositor {
         let mut msg = Message::<12>::new(self.id, Self::CREATE_REGION_OP);
         msg.write_u32(id).build();
         conn.write_request(msg.data());
-        WlRegion::new(id)
+        WlRegion::from_id(id)
     }
 }
 
@@ -530,12 +530,6 @@ pub struct WlRegion {
 }
 
 impl WlRegion {
-    pub(crate) fn new(id: u32) -> Self {
-        Self {
-            id,
-            interface: "wl_region",
-        }
-    }
 }
 
 impl Object for WlRegion {
@@ -554,7 +548,7 @@ pub struct WlBuffer {
 }
 
 #[repr(i32)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum WlOutputTransform {
     Normal = 0,
     D90,
@@ -582,7 +576,7 @@ impl From<i32> for WlOutputTransform {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum WlOutputEvent<'a> {
     Geometry {
         x: i32,
@@ -613,7 +607,7 @@ pub enum WlOutputEvent<'a> {
 }
 
 #[repr(i32)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum WlOutputMode {
     Current = 1,
     Preffered,
@@ -630,7 +624,7 @@ impl From<i32> for WlOutputMode {
 }
 
 #[repr(i32)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum WlOutputSubPixel {
     Unknown = 0,
     None,
@@ -669,6 +663,11 @@ impl WlOutput {
     pub(crate) const SCALE_OP: u16 = 3;
     pub(crate) const NAME_OP: u16 = 4;
     pub(crate) const DESCRIPTION_OP: u16 = 5;
+
+    pub fn release(&self, conn: &Connection) {
+        let mut msg = Message::<8>::new(self.id, Self::RELEASE_OP);
+        conn.write_request(msg.data());
+    }
 
     pub fn parse_event(&self, event: Event<'_>) -> WlOutputEvent<'_> {
         let parser = event.parser();

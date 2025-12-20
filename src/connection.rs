@@ -62,8 +62,8 @@ impl Connection {
         EventIter::new(&self.in_buffer[..read])
     }
 
-    pub fn flush(&mut self) -> std::io::Result<()> {
-        self.socket.flush()
+    pub fn flush(&self) -> std::io::Result<()> {
+        self.get_mut().socket.flush()
     }
 }
 
