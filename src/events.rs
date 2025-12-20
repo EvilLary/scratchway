@@ -109,18 +109,26 @@ impl<'a> EventDataParser<'a> {
         num
     }
 
-    pub fn get_string(&'a self) -> &'a str {
+    pub fn get_string<'b>(&'a self) -> &'b str {
         let str_len = self.get_u32() as usize;
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let padded_len = roundup(str_len, 4);
         // Null terminator not included
-        let string = &data[..str_len - 1];
+        let str = &data[..str_len - 1];
         self.idx.replace(idx + padded_len);
-        unsafe { core::str::from_utf8_unchecked(string) }
+
+        // SAFETY: the reference behind message is valid for as long
+        // as the event.data is valid, Rust just can't know it
+        unsafe {
+            let len = str.len();
+            let ptr = str.as_ptr();
+            let slice = core::slice::from_raw_parts(ptr, len);
+            core::str::from_utf8_unchecked(slice)
+        }
     }
 
-    pub fn get_array_u32(&'a self) -> &'a [u32] {
+    pub fn get_array_u32<'b>(&'a self) -> &'b [u32] {
         let array_len = self.get_u32() as usize;
         let idx = self.idx.get();
         let data = &self.data[idx..];
@@ -130,6 +138,14 @@ impl<'a> EventDataParser<'a> {
         };
         self.idx.replace(idx + array_len);
         array
+    }
+
+    pub(crate) fn get_i32(&self) -> i32 {
+        let idx = self.idx.get();
+        let data = &self.data[idx..];
+        let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
+        self.idx.replace(idx + core::mem::size_of::<i32>());
+        num
     }
 }
 
@@ -159,6 +175,13 @@ impl<const S: usize> Message<S> {
             buf: [0; S],
             len: 0,
         }
+    }
+
+    pub fn write_i32(&mut self, value: i32) -> &mut Self {
+        const SIZE: usize = size_of::<i32>();
+        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
+        self.len += SIZE;
+        self
     }
 
     pub fn write_u32(&mut self, value: u32) -> &mut Self {

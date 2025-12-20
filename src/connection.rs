@@ -1,7 +1,15 @@
 #![allow(unused)]
 
 use crate::events::*;
-use std::{cell::Cell, io::{Read, Write}, os::unix::net::UnixStream, rc::Rc};
+use std::{
+    cell::Cell,
+    io::{Read, Write},
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::net::UnixStream,
+    },
+    rc::Rc,
+};
 
 #[derive(Debug)]
 pub struct Connection {
@@ -24,21 +32,33 @@ impl Connection {
         })
     }
 
-    pub fn display(&self) -> crate::core::wl_display::WlDisplay {
+    pub fn display_fd(&self) -> RawFd {
+        self.socket.as_raw_fd()
+    }
+
+    pub fn display(&self) -> crate::core::WlDisplay {
         let display_id = self.id_counter.get_new();
-        crate::core::wl_display::WlDisplay::new(display_id)
+        crate::core::WlDisplay::new(display_id)
     }
 
     pub(crate) fn new_id(&self) -> u32 {
         self.id_counter.get_new()
     }
 
-    pub(crate) fn write_request<const S: usize>(&mut self, msg: Message<S>) {
-        self.socket.write(msg.data());
+    pub(crate) fn write_request(&self, msg: &[u8]) {
+        self.get_mut().socket.write(msg);
     }
 
-    pub fn blocking_read<'a>(&'a mut self) -> EventIter<'a> {
-        let read = self.socket.read(&mut self.in_buffer).unwrap();
+    fn get_mut(&self) -> &mut Self {
+        unsafe {
+            (self as *const Self as *mut Self)
+                .as_mut()
+                .unwrap_unchecked()
+        }
+    }
+    pub fn blocking_read<'a>(&'a self) -> EventIter<'a> {
+        let conn = self.get_mut();
+        let read = conn.socket.read(&mut conn.in_buffer).unwrap();
         EventIter::new(&self.in_buffer[..read])
     }
 
