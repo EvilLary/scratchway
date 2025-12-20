@@ -895,9 +895,9 @@ fn main() -> io::Result<()> {
 
     let mut state = State {
         wl_registry: wl_get_registry(&mut socket),
-        height: 800,
-        width: 800,
-        stride: 4 * 800, // bytes per row
+        height: 500,
+        width: 500,
+        stride: 4 * 500, // bytes per row
         ..Default::default()
     };
 
