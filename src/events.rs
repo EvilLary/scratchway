@@ -43,6 +43,12 @@ pub struct Event<'a> {
     pub data: &'a [u8],
 }
 
+impl<'a> Event<'a> {
+    pub fn parser(&self) -> EventDataParser<'a> {
+        EventDataParser::new(self.data)
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct Header {

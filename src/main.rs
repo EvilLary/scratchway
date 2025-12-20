@@ -13,9 +13,8 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use crate::events::*;
+use scratchway::events::*;
 
-mod events;
 use libc::{
     CMSG_DATA, CMSG_FIRSTHDR, CMSG_LEN, CMSG_SPACE, MAP_SHARED, O_CREAT, O_EXCL, O_RDWR, PROT_READ,
     PROT_WRITE, SCM_RIGHTS, SOL_SOCKET, c_char, c_int, cmsghdr, iovec, msghdr, sendmsg,

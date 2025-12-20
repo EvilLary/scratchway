@@ -1,0 +1,5 @@
+# edition="2021"
+style_edition = "2024"
+fn_args_layout="Compressed"
+struct_lit_single_line=false
+struct_field_align_threshold=20
