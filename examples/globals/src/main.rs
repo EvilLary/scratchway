@@ -303,8 +303,8 @@ impl State {
     fn draw(&mut self) {
         debug_assert!(!self.shm_data.is_null());
 
-        let w = self.width as usize;
-        let h = self.height as usize;
+        let width = self.width as usize;
+        let height = self.height as usize;
 
         let mut pixels = unsafe {
             std::slice::from_raw_parts_mut(
@@ -313,12 +313,69 @@ impl State {
             )
         };
 
-        for (y, row) in pixels.chunks_mut(w).enumerate() {
+        for (y, row) in pixels.chunks_mut(width).enumerate() {
             for (x, cell) in row.iter_mut().enumerate() {
-                let r = ((x * 255) / w) as u32;
+                let r = ((x * 255) / width) as u32;
                 let g = 0;
-                let b = ((y * 255) / h) as u32;
+                let b = ((y * 255) / height) as u32;
                 *cell = (r << 16) | (g << 8) | b;
+            }
+        }
+
+        struct Rect {
+            x: usize,
+            y: usize,
+            w: usize,
+            h: usize,
+        };
+
+        let rect = Rect {
+            x: 450,
+            y: 450,
+            w: 100,
+            h: 200,
+        };
+
+        let max_x = (rect.x + rect.w).min(width);
+        let max_y = (rect.y + rect.h).min(height);
+
+        for y in (rect.y..max_y) {
+            for x in (rect.x..max_x) {
+                pixels[y * width + x] = 0x0000FFFF;
+            }
+        }
+
+        struct Circle {
+            x: i32,
+            y: i32,
+            r: i32,
+        }
+
+        let circle = Circle {
+            x: 250,
+            y: 250,
+            r: 50,
+        };
+
+        let begin_x = circle.x - circle.r;
+        let begin_y = circle.y - circle.r;
+
+        let end_x = (circle.x + circle.r).min(width as i32);
+        let end_y = (circle.y + circle.r).min(height as i32);
+
+        let r_seq = circle.r * circle.r;
+
+        // let w = circle.r * 2;
+        // let h = w;
+
+        for y in (begin_y..end_y) {
+            for x in (begin_x..end_x) {
+                let dx = (circle.x as i32 - x as i32);
+                let dy = (circle.y as i32 - y as i32);
+                if (dx * dx) + (dy * dy) < r_seq {
+                    // pixels[y * (state.width as usize) + x] = (r << 16) | (g << 8) | b;
+                    pixels[(y * width as i32 + x) as usize] = 0xff00ff;
+                }
             }
         }
     }
