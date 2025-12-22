@@ -1,106 +1,345 @@
 #![allow(unused)]
 
-use std::io::Read;
+use std::os::fd::RawFd;
 
 use scratchway::connection::Connection;
 use scratchway::core::*;
-use scratchway::events::{Event, EventDataParser, EventIter};
+use scratchway::events::Event;
+use scratchway::protocols::xdg_shell::*;
 
 fn main() -> std::io::Result<()> {
-    let mut conn = Connection::connect()?;
-    let mut state = State::init(&conn).unwrap();
-    loop {
-        let mut events = conn.blocking_read();
-        while let Some(event) = events.next() {
+    let conn = Connection::connect()?;
+    let wl_display = conn.display();
+    let wl_registry = wl_display.get_registry(&conn);
+
+    let mut callbacks: Vec<(u32, Callback)> = Vec::with_capacity(16);
+
+    callbacks.push((wl_registry.id(), State::on_registry_event));
+    callbacks.push((wl_display.id(), State::on_wldisplay_event));
+
+    let mut state = State {
+        wl_display,
+        wl_registry: Some(wl_registry),
+        callbacks,
+        ..Default::default()
+    };
+
+    while !state.exit {
+        let events = conn.blocking_read();
+        for event in events {
             state.handle_event(&conn, event);
         }
     }
-    // println!("Hello, world!");
+    state.cleanup();
+
     Ok(())
 }
 
+type Callback = fn(&mut State, &Connection, Event<'_>);
+#[derive(Debug, Default)]
 struct State {
     wl_display: WlDisplay,
-    wl_registry: WlRegistry,
-    wl_outputs: Vec<WlOutput>,
-    wl_compositor: WlCompositor,
+    wl_registry: Option<WlRegistry>,
+    wl_compositor: Option<WlRegistry>,
+    xdg_wm_base: Option<XdgWmBase>,
 
-    wl_surface: WlSurface,
+    wl_surface: Option<WlSurface>,
+    wl_buffer: Option<WlBuffer>,
+    xdg_toplevel: Option<XdgToplevel>,
+    xdg_surface: Option<XdgSurface>,
+
+    wl_shm: Option<WlShm>,
+    wl_shm_pool: Option<WlShmPool>,
+    shm_fd: RawFd,
+    shm_data: *mut u8,
+    shm_pool_size: i32,
+
+    configure: bool,
+    callbacks: Vec<(u32, Callback)>,
+
+    width: i32,
+    height: i32,
+    stride: i32,
+
+    exit: bool,
 }
 
 impl State {
-    fn init(conn: &Connection) -> Option<Self> {
-        let wl_display = conn.display();
-        let wl_registry = wl_display.get_registry(&conn);
-        let mut wl_compositor: Option<WlCompositor> = None;
-        conn.blocking_read()
-            .map(|ev| wl_registry.parse_event(ev))
-            .filter_map(|global| {
-                if let WlRegistryEvent::Global {
-                    name,
-                    interface,
-                    version,
-                } = global
-                {
-                    if (interface) == "wl_compositor" {
-                        Some((name, interface, version))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .for_each(|g| match g.1 {
-                "wl_compositor" => wl_compositor = Some(wl_registry.bind(conn, g.0, g.1, g.2)),
-                _ => {}
-            });
-
-        let wl_compositor = wl_compositor?;
-        let wl_outputs = Vec::new();
-        conn.flush().unwrap();
-
-        let wl_surface = wl_compositor.create_surface(conn);
-        Some(Self {
-            wl_compositor,
-            wl_registry,
-            wl_outputs,
-            wl_display,
-            wl_surface,
-        })
-    }
-    fn handle_event(&mut self, conn: &Connection, event: Event) {
-        match event.header.id {
-            id if id == self.wl_display.id => {
-                let ev = self.wl_display.parse_event(event);
-                println!("{:?}", ev);
-            }
-            id if id == self.wl_registry.id => self.handle_reg_event(conn, event),
-            _ => {}
+    pub fn handle_event(&mut self, conn: &Connection, event: Event<'_>) {
+        if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
+            cb(self, conn, event)
+        } else {
+            eprintln!(
+                "[\x1b[33mWARNING\x1b[0m]: Unhandled event for id: {}, opcode: {}",
+                event.header.id, event.header.opcode
+            )
         }
     }
 
-    fn handle_reg_event(&mut self, conn: &Connection, event: Event) {
-        let ev = self.wl_registry.parse_event(event);
+    fn on_wldisplay_event(&mut self, _conn: &Connection, event: Event) {
+        let ev = self.wl_display.parse_event(event);
+        match ev {
+            WlDisplayEvent::Error {
+                object_id,
+                code,
+                message,
+            } => {
+                eprintln!("Protocol error: code {code} from object {object_id}, {message}");
+                self.exit = true;
+            }
+            WlDisplayEvent::DeleteId { id } => self.callbacks.retain(|(obj_id, _)| id != *obj_id),
+        }
+    }
+
+    fn on_registry_event(&mut self, conn: &Connection, event: Event) {
+        let Some(wl_registry) = self.wl_registry.as_ref() else {
+            return; // this should never be reached
+        };
+        let ev = wl_registry.parse_event(event);
         match ev {
             WlRegistryEvent::Global {
                 name,
                 interface,
                 version,
             } => match interface {
-                "wl_output" => {
-                    self.wl_outputs
-                        .push(self.wl_registry.bind(&conn, name, interface, version));
+                "wl_shm" => {
+                    let wl_shm: WlShm = wl_registry.bind(&conn, name, interface, version);
+                    self.wl_shm = Some(wl_shm);
+                    self.init_shm(conn);
                 }
                 "wl_compositor" => {
-                    self.wl_compositor = self.wl_registry.bind(&conn, name, interface, version);
+                    let wl_compositor: WlCompositor =
+                        wl_registry.bind(&conn, name, interface, version);
+                    let wl_surface = wl_compositor.create_surface(conn);
+
+                    self.callbacks
+                        .push((wl_surface.id, Self::on_wlsurface_event));
+                    self.wl_surface = Some(wl_surface);
                 }
+                "xdg_wm_base" => {
+                    let xdg_wm_base: XdgWmBase = wl_registry.bind(&conn, name, interface, version);
+                    self.callbacks
+                        .push((xdg_wm_base.id, Self::on_xdgwmbase_event));
+
+                    self.xdg_wm_base = Some(xdg_wm_base);
+                    if self.xdg_wm_base.is_some() && self.xdg_surface.is_none() {
+                        self.init_toplevel(conn);
+                    }
+                }
+                // "wp_single_pixel_buffer_manager_v1" => {
+                //     let single_px_buffer: WpSinglePixelBufferMgr =
+                //         wl_registry.bind(&conn, name, interface, version);
+                //
+                //     let wl_buffer = single_px_buffer.create_buffer(
+                //         conn,
+                //         (u32::MAX / 255) * 71,
+                //         (u32::MAX / 255) * 125,
+                //         (u32::MAX / 255) * 200,
+                //         u32::MAX,
+                //     );
+                //
+                //     single_px_buffer.destroy(conn);
+                //     self.callbacks.push((wl_buffer.id, Self::on_wlbuffer_event));
+                //     self.wl_buffer = Some(wl_buffer);
+                // }
                 _ => {}
             },
             WlRegistryEvent::GlobalRemove { name } => {
                 println!("Removed: {:?}", name);
             }
         }
-        println!("{:?}", ev);
+    }
+
+    fn on_xdgsurface_event(&mut self, conn: &Connection, event: Event<'_>) {
+        let Some(xdg_surface) = self.xdg_surface.as_ref() else {
+            return;
+        };
+        let ev = xdg_surface.parse_event(event);
+        match ev {
+            XdgSurfaceEvent::Configure { serial } => {
+                if let Some(ref wl_buffer) = self.wl_buffer
+                    && !self.configure
+                {
+                    let wl_surface = self.wl_surface.as_ref().unwrap();
+                    // wl_surface.set_buffer_transform(conn, WlOutputTransform::Flipped270);
+                    wl_surface.attach(conn, Some(wl_buffer), 0, 0);
+                    wl_surface.commit(conn);
+                    self.configure = true;
+                }
+                xdg_surface.ack_configure(conn, serial);
+            }
+        }
+    }
+    fn on_wlsurface_event(&mut self, conn: &Connection, event: Event<'_>) {
+        let Some(wl_surface) = self.wl_surface.as_ref() else {
+            return;
+        };
+        let ev = wl_surface.parse_event(event);
+        match ev {
+            WlSurfaceEvent::Enter { output } => {}
+            WlSurfaceEvent::Leave { output } => {}
+            WlSurfaceEvent::PrefferedBufferScale { factor } => {}
+            WlSurfaceEvent::PrefferedBufferTransform { transform } => {}
+        }
+    }
+    fn on_xdgwmbase_event(&mut self, conn: &Connection, event: Event<'_>) {
+        let Some(xdg_wm_base) = self.xdg_wm_base.as_ref() else {
+            return;
+        };
+        let ev = xdg_wm_base.parse_event(event);
+        match ev {
+            XdgWmBaseEvent::Ping { serial } => {
+                xdg_wm_base.pong(conn, serial);
+            }
+        }
+    }
+
+    fn on_xdgtoplevel_event(&mut self, conn: &Connection, event: Event<'_>) {
+        let Some(xdg_toplevel) = self.xdg_toplevel.as_ref() else {
+            return;
+        };
+        let ev = xdg_toplevel.parse_event(event);
+        match ev {
+            XdgToplevelEvent::Configure {
+                width,
+                height,
+                states,
+            } => {}
+            XdgToplevelEvent::ConfigureBounds { width, height } => {}
+            XdgToplevelEvent::Close => self.exit = true,
+            XdgToplevelEvent::WmCapabilities { capabilities } => {}
+        }
+    }
+
+    fn on_wlbuffer_event(&mut self, conn: &Connection, event: Event<'_>) {
+        let Some(wl_buffer) = self.wl_buffer.as_ref() else {
+            return; // this should never be reached
+        };
+        let ev = wl_buffer.parse_event(event);
+        // println!("{:?}", ev);
+    }
+
+    fn init_toplevel(&mut self, conn: &Connection) {
+        let Some(wl_surface) = self.wl_surface.as_ref() else {
+            return;
+        };
+
+        let Some(xdg_wm_base) = self.xdg_wm_base.as_ref() else {
+            return;
+        };
+
+        let xdg_surface = xdg_wm_base.get_xdg_surface(conn, wl_surface);
+        self.callbacks
+            .push((xdg_surface.id, Self::on_xdgsurface_event));
+
+        let xdg_toplevel = xdg_surface.get_toplevel(conn);
+        self.callbacks
+            .push((xdg_toplevel.id, Self::on_xdgtoplevel_event));
+
+        xdg_toplevel.set_title(conn, "Hola bola");
+        xdg_toplevel.set_app_id(conn, "com.github.evillary");
+
+        // wl_surface.set_buffer_scale(conn, 2);
+        wl_surface.attach(conn, self.wl_buffer.as_ref(), 0, 0);
+        wl_surface.commit(conn);
+
+        self.xdg_toplevel = Some(xdg_toplevel);
+        self.xdg_surface = Some(xdg_surface);
+    }
+
+    fn init_shm(&mut self, conn: &Connection) {
+        self.height = 500;
+        self.width = 500;
+        self.stride = self.width * 4;
+
+        self.shm_pool_size = self.stride * self.height;
+        let name = c"/shm_com_github_evillary".as_ptr().cast();
+        let shm_fd = unsafe {
+            let flags = libc::O_RDWR | libc::O_EXCL | libc::O_CREAT;
+            libc::shm_open(name, flags, 0600)
+        };
+
+        if shm_fd == -1 {
+            panic!("Couldn't create shm {}", std::io::Error::last_os_error());
+        }
+
+        unsafe {
+            if libc::shm_unlink(name) == -1 {
+                panic!("Couldn't unlink shm {}", std::io::Error::last_os_error());
+            }
+            if libc::ftruncate(shm_fd, self.shm_pool_size as i64) == -1 {
+                panic!("Couldn't truncate shm {}", std::io::Error::last_os_error());
+            }
+        }
+        let shm_pool = unsafe {
+            let prot = libc::PROT_READ | libc::PROT_WRITE;
+            libc::mmap(
+                std::ptr::null_mut(),
+                self.shm_pool_size as usize,
+                prot,
+                libc::MAP_SHARED,
+                shm_fd,
+                0,
+            )
+        };
+
+        if shm_pool.is_null() {
+            panic!("Couldn't mmap shm {}", std::io::Error::last_os_error());
+        }
+
+        self.shm_fd = shm_fd;
+        self.shm_data = shm_pool as *mut u8;
+
+        self.draw();
+
+        let wl_shm = self.wl_shm.as_ref().unwrap();
+        let wl_shm_pool = wl_shm.create_pool(conn, self.shm_fd, self.shm_pool_size);
+        let wl_buffer = wl_shm_pool.create_buffer(conn, 0, self.width, self.height, self.stride, 1);
+
+        self.wl_shm_pool = Some(wl_shm_pool);
+        self.wl_buffer = Some(wl_buffer);
+    }
+
+    fn draw(&mut self) {
+        debug_assert!(!self.shm_data.is_null());
+
+        let w = self.width as usize;
+        let h = self.height as usize;
+
+        let mut pixels = unsafe {
+            std::slice::from_raw_parts_mut(
+                self.shm_data as *mut u32,
+                self.shm_pool_size as usize / 4,
+            )
+        };
+
+        for (y, row) in pixels.chunks_mut(w).enumerate() {
+            for (x, cell) in row.iter_mut().enumerate() {
+                let r = ((x * 255) / w) as u32;
+                let g = 0;
+                let b = ((y * 255) / h) as u32;
+                *cell = (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    fn cleanup(&self) {
+        unsafe {
+            if self.shm_fd != 0 {
+                libc::close(self.shm_fd);
+            }
+            if !self.shm_data.is_null() {
+                libc::munmap(
+                    self.shm_data as *mut libc::c_void,
+                    core::mem::size_of_val(self.shm_data.as_mut().unwrap()),
+                );
+            }
+        }
     }
 }
+
+// impl Drop for State {
+//     fn drop(&mut self) {
+//         self.cleanup()
+//     }
+// }

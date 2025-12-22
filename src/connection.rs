@@ -11,12 +11,21 @@ use std::{
     rc::Rc,
 };
 
+static DEBUG: bool = false;
+
+macro_rules! trust_me_bro {
+    ($cooked:expr) => {
+        unsafe { $cooked }
+    };
+}
+
 #[derive(Debug)]
 pub struct Connection {
     pub(crate) socket: UnixStream,
     pub(crate) id_counter: IdCounter,
     pub(crate) in_buffer: Vec<u8>,
     pub(crate) out_buffer: Vec<u8>,
+    pub(crate) debug: bool,
 }
 
 impl Connection {
@@ -24,11 +33,13 @@ impl Connection {
         let wayland_disp = std::env::var_os("WAYLAND_DISPLAY").unwrap_or("wayland-0".into());
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").unwrap_or("/tmp/".into());
         let socket = UnixStream::connect(std::path::PathBuf::from(runtime_dir).join(wayland_disp))?;
+        let debug = unsafe { !libc::getenv(c"WAYLAND_DEBUG".as_ptr()).is_null() };
         Ok(Self {
             socket,
             id_counter: IdCounter::new(),
             in_buffer: vec![0; 4096],
             out_buffer: vec![0; 4096],
+            debug,
         })
     }
 
@@ -37,8 +48,7 @@ impl Connection {
     }
 
     pub fn display(&self) -> crate::core::WlDisplay {
-        let display_id = self.id_counter.get_new();
-        crate::core::WlDisplay::new(display_id)
+        crate::core::Object::from_id(1)
     }
 
     pub(crate) fn new_id(&self) -> u32 {
@@ -50,13 +60,15 @@ impl Connection {
     }
 
     fn get_mut(&self) -> &mut Self {
-        unsafe {
+        // SAFETY: trust me bro
+        trust_me_bro! {
             (self as *const Self as *mut Self)
                 .as_mut()
                 .unwrap_unchecked()
         }
     }
     pub fn blocking_read<'a>(&'a self) -> EventIter<'a> {
+        let _ = self.flush();
         let conn = self.get_mut();
         let read = conn.socket.read(&mut conn.in_buffer).unwrap();
         EventIter::new(&self.in_buffer[..read])
@@ -84,7 +96,7 @@ unsafe impl Send for IdCounter {}
 impl IdCounter {
     pub(crate) const fn new() -> Self {
         Self {
-            current: Cell::new(0),
+            current: Cell::new(1),
         }
     }
     pub(crate) const fn get_new(&self) -> u32 {
