@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 #[derive(Debug)]
 pub struct EventIter<'a> {
     buf: &'a [u8],
@@ -41,6 +43,12 @@ pub struct Event<'a> {
     pub data: &'a [u8],
 }
 
+impl<'a> Event<'a> {
+    pub fn parser(&self) -> EventDataParser<'a> {
+        EventDataParser::new(self.data)
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct Header {
@@ -65,42 +73,151 @@ impl Header {
 
 pub struct EventDataParser<'a> {
     pub data: &'a [u8],
+    idx: Cell<usize>,
 }
 
 impl<'a> EventDataParser<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data }
+        Self {
+            data,
+            idx: Cell::new(0),
+        }
     }
 
     pub fn get_u16(&mut self) -> u16 {
-        let num = u16::from_ne_bytes([self.data[0], self.data[1]]);
-        self.data = &self.data[2..];
+        let idx = self.idx.get();
+        let data = &self.data[idx..];
+        let num = u16::from_ne_bytes([data[0], data[1]]);
+        self.idx.replace(idx + core::mem::size_of::<u16>());
         num
     }
 
-    pub fn get_u32(&mut self) -> u32 {
-        let num = u32::from_ne_bytes([self.data[0], self.data[1], self.data[2], self.data[3]]);
-        self.data = &self.data[4..];
+    pub fn get_fixed(&mut self) -> f32 {
+        let idx = self.idx.get();
+        let data = &self.data[idx..];
+        let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f32;
+        self.idx.replace(idx + core::mem::size_of::<i32>());
+        num / 256.0
+    }
+
+    pub fn get_u32(&self) -> u32 {
+        let idx = self.idx.get();
+        let data = &self.data[idx..];
+        // let num = u32::from_ne_bytes(data[0..4]);
+        let num = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
+        self.idx.replace(idx + core::mem::size_of::<u32>());
         num
     }
 
-    pub fn get_string(&mut self) -> String {
-        let len = self.get_u32() as usize;
-        let padded_len = crate::roundup(len, 4);
+    pub fn get_string<'b>(&'a self) -> &'b str {
+        let str_len = self.get_u32() as usize;
+        let idx = self.idx.get();
+        let data = &self.data[idx..];
+        let padded_len = roundup(str_len, 4);
         // Null terminator not included
-        let string = self.data[..len - 1].to_vec();
-        self.data = &self.data[padded_len..];
-        unsafe { String::from_utf8_unchecked(string) }
+        let str = &data[..str_len - 1];
+        self.idx.replace(idx + padded_len);
+
+        // SAFETY: the reference behind message is valid for as long
+        // as the event.data is valid, Rust just can't know it
+        unsafe {
+            let len = str.len();
+            let ptr = str.as_ptr();
+            let slice = core::slice::from_raw_parts(ptr, len);
+            core::str::from_utf8_unchecked(slice)
+        }
     }
 
-    pub fn get_array_u32(&mut self) -> Vec<u32> {
-        let len = self.get_u32() as usize;
-        let vec = unsafe {
-            let ptr = self.data[..len].as_ptr() as *const u32;
-            let slice = core::slice::from_raw_parts(ptr, len / size_of::<u32>());
-            slice.into()
+    pub fn get_array_u32<'b>(&'a self) -> &'b [u32] {
+        let array_len = self.get_u32() as usize;
+        let idx = self.idx.get();
+        let data = &self.data[idx..];
+        let array = unsafe {
+            let ptr = data[..array_len].as_ptr() as *const u32;
+            core::slice::from_raw_parts(ptr, array_len / size_of::<u32>())
         };
-        self.data = &self.data[len as usize..];
-        vec
+        self.idx.replace(idx + array_len);
+        array
+    }
+
+    pub(crate) fn get_i32(&self) -> i32 {
+        let idx = self.idx.get();
+        let data = &self.data[idx..];
+        let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
+        self.idx.replace(idx + core::mem::size_of::<i32>());
+        num
+    }
+}
+
+fn roundup(value: usize, mul: usize) -> usize {
+    (((value - 1) / mul) + 1) * mul
+}
+
+#[derive(Debug)]
+pub struct Message<const S: usize> {
+    buf: [u8; S],
+    len: usize,
+}
+
+impl<const S: usize> Message<S> {
+    pub fn new(id: u32, op: u16) -> Self {
+        let mut msg = Message::empty();
+        msg.write_u32(id).write_u16(op).write_u16(8);
+        msg
+    }
+
+    pub fn build(&mut self) {
+        self.buf[6..8].copy_from_slice(&(self.len as u16).to_ne_bytes());
+    }
+
+    fn empty() -> Self {
+        Self {
+            buf: [0; S],
+            len: 0,
+        }
+    }
+
+    pub fn write_i32(&mut self, value: i32) -> &mut Self {
+        const SIZE: usize = size_of::<i32>();
+        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
+        self.len += SIZE;
+        self
+    }
+
+    pub fn write_u32(&mut self, value: u32) -> &mut Self {
+        const SIZE: usize = size_of::<u32>();
+        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
+        self.len += SIZE;
+        self
+    }
+
+    // TODO: Does this actually work??
+    pub fn write_fixed(&mut self, value: f32) -> &mut Self {
+        let wl_fixed = f32::to_bits((value * 256.0).round());
+        self.write_u32(wl_fixed);
+        self
+    }
+
+    pub fn write_u16(&mut self, value: u16) -> &mut Self {
+        const SIZE: usize = size_of::<u16>();
+        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
+        self.len += SIZE;
+        self
+    }
+
+    pub fn write_str(&mut self, str: &str) -> &mut Self {
+        // null included
+        self.write_u32((str.len() + 1) as u32);
+        self.buf[self.len..str.len() + self.len].copy_from_slice(str.as_bytes());
+        self.len += roundup(str.len() + 1, 4);
+        self
+    }
+
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        &mut self.buf[..self.len]
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.buf[..self.len]
     }
 }
