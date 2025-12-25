@@ -1,9 +1,10 @@
 #![allow(unused)]
+#![feature(unix_socket_ancillary_data)]
 
 use crate::events::*;
 use std::{
     cell::Cell,
-    io::{Read, Write},
+    io::{IoSlice, Read, Write},
     os::{
         fd::{AsRawFd, RawFd},
         unix::net::UnixStream,
@@ -11,7 +12,10 @@ use std::{
     rc::Rc,
 };
 
-static DEBUG: bool = false;
+use crate::utils::Bucket;
+
+static DEBUG: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| unsafe { !libc::getenv(c"WAYLAND_DEBUG".as_ptr()).is_null() });
 
 macro_rules! trust_me_bro {
     ($cooked:expr) => {
@@ -19,13 +23,15 @@ macro_rules! trust_me_bro {
     };
 }
 
+const MAX_BUFFER_SIZE: usize = 4096;
 #[derive(Debug)]
 pub struct Connection {
-    pub(crate) socket: UnixStream,
+    pub(crate) socket:     UnixStream,
     pub(crate) id_counter: IdCounter,
-    pub(crate) in_buffer: Vec<u8>,
-    pub(crate) out_buffer: Vec<u8>,
-    pub(crate) debug: bool,
+
+    pub(crate) in_buffer:  Bucket<u8, MAX_BUFFER_SIZE>,
+    pub(crate) out_buffer: Bucket<u8, MAX_BUFFER_SIZE>,
+    pub(crate) out_fds:    [RawFd; 10],
 }
 
 impl Connection {
@@ -34,12 +40,14 @@ impl Connection {
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").unwrap_or("/tmp/".into());
         let socket = UnixStream::connect(std::path::PathBuf::from(runtime_dir).join(wayland_disp))?;
         let debug = unsafe { !libc::getenv(c"WAYLAND_DEBUG".as_ptr()).is_null() };
+        let out_buffer = Bucket::new();
+        let in_buffer = Bucket::full();
         Ok(Self {
             socket,
             id_counter: IdCounter::new(),
-            in_buffer: vec![0; 4096],
-            out_buffer: vec![0; 4096],
-            debug,
+            in_buffer,
+            out_buffer,
+            out_fds: [0; 10],
         })
     }
 
@@ -56,7 +64,12 @@ impl Connection {
     }
 
     pub(crate) fn write_request(&self, msg: &[u8]) {
-        self.get_mut().socket.write(msg);
+        // TODO: check buffer len to flush
+        if !self.out_buffer.can_fit(msg.len()) {
+            self.flush();
+        }
+        self.get_mut().out_buffer.extend_from_slice(msg);
+        // self.get_mut().socket.write(msg);
     }
 
     fn get_mut(&self) -> &mut Self {
@@ -71,28 +84,62 @@ impl Connection {
     pub fn blocking_read<'a>(&'a self) -> EventIter<'a> {
         let _ = self.flush();
         let conn = self.get_mut();
-        let read = conn.socket.read(&mut conn.in_buffer).unwrap();
-        EventIter::new(&self.in_buffer[..read])
+        // FIXME
+        let read = unsafe {
+            libc::recv(
+                conn.display_fd(),
+                conn.in_buffer.as_mut_ptr().cast(),
+                conn.in_buffer.len(),
+                libc::MSG_NOSIGNAL,
+            )
+        };
+        // FIXME
+        if read <= 0 {
+            panic!("Failed to read from wayland socket");
+        }
+        EventIter::new(&self.in_buffer.as_slice()[..read as usize])
+    }
+
+    pub(crate) fn add_fd(&self, fd: RawFd) {}
+
+    fn fflush(&self) -> std::io::Result<()> {
+        // let iov = IoSlice::new(&self.out_buffer);
+        self.get_mut().socket.flush()
     }
 
     pub fn flush(&self) -> std::io::Result<()> {
-        self.get_mut().socket.flush()
+        let me = self.get_mut();
+        // FIXME
+        unsafe {
+            assert!(
+                libc::send(
+                    me.display_fd(),
+                    me.out_buffer.as_ptr().cast(),
+                    me.out_buffer.len(),
+                    libc::MSG_NOSIGNAL
+                ) != -1
+            );
+            me.out_buffer.clear();
+        }
+        Ok(())
+    }
+
+    pub fn roundtrip(&self, state: &mut impl State) -> std::io::Result<()> {
+        let display = self.display();
+        let wl_callback = display.sync(self);
+        self.flush();
+        todo!()
     }
 }
 
-impl Read for Connection {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.socket.read(buf)
-    }
+pub trait State {
+    fn handle_event(&mut self, conn: &Connection, event: Event<'_>);
 }
 
 #[derive(Debug)]
 pub(crate) struct IdCounter {
     pub(crate) current: Cell<u32>,
 }
-
-unsafe impl Sync for IdCounter {}
-unsafe impl Send for IdCounter {}
 
 impl IdCounter {
     pub(crate) const fn new() -> Self {

@@ -3,6 +3,7 @@
 use scratchway::connection::Connection;
 use scratchway::events::Event;
 use scratchway::protocols::core::*;
+use scratchway::protocols::viewporter::*;
 use scratchway::protocols::wlr_layer_shell_unstable_v1::*;
 use scratchway::protocols::wp_single_pixel_buffer_manager_v1::*;
 
@@ -13,10 +14,10 @@ fn main() -> std::io::Result<()> {
     let wl_display = conn.display();
     let wl_registry = wl_display.get_registry(&conn);
 
-    let mut callbacks: Vec<(u32, Callback)> = Vec::with_capacity(16);
-
-    callbacks.push((wl_registry.id, State::on_registry_event));
-    callbacks.push((wl_display.id, State::on_wldisplay_event));
+    let mut callbacks: Vec<(u32, Callback)> = vec![
+        (wl_registry.id, State::on_registry_event),
+        (wl_display.id, State::on_wldisplay_event),
+    ];
 
     let mut state = State {
         wl_display,
@@ -32,7 +33,7 @@ fn main() -> std::io::Result<()> {
 
     if state.wlr_layer_shell.is_none() {
         eprintln!("Compositor doesn't support zwlr_layer_shell_v1 protocol");
-        return Ok(());
+        std::process::exit(1);
     }
 
     conn.flush()?;
@@ -57,9 +58,11 @@ struct State {
     wl_display: WlDisplay,
     wl_registry: Option<WlRegistry>,
     wl_compositor: Option<WlCompositor>,
+    viewporter: Option<WpViewporter>,
     wlr_layer_shell: Option<WlrLayerShell>,
 
     wl_surface: Option<WlSurface>,
+    viewport: Option<WpViewport>,
     wl_buffer: Option<WlBuffer>,
     layer_surface: Option<WlrLayerSurface>,
     configured: bool,
@@ -76,9 +79,11 @@ impl State {
         let Some(wlr_layer_shell) = self.wlr_layer_shell.as_ref() else {
             panic!("bruh");
         };
+
         let Some(wl_compositor) = self.wl_compositor.as_ref() else {
             panic!("bruh");
         };
+
         let Some(wl_buffer) = self.wl_buffer.as_ref() else {
             panic!("bruh");
         };
@@ -91,17 +96,27 @@ impl State {
             conn,
             &wl_surface,
             None,
-            WlrLayer::Overlay,
+            WlrLayer::Background,
             "crosshair",
         );
+
         self.callbacks
             .push((layer_surface.id, Self::on_layersurface_event));
 
-        layer_surface.set_exclusive_zone(conn, 0);
-        layer_surface.set_anchor(conn, 0);
+        if let Some(ref viewporter) = self.viewporter {
+            let viewport = viewporter.get_viewport(conn, &wl_surface);
+            viewport.set_destination(conn, 500, 100);
+            self.viewport = Some(viewport);
+        }
+
+        let anchor = WlrLayerSurface::ANCHOR_TOP;
+
+        layer_surface.set_exclusive_zone(conn, 100);
+        layer_surface.set_anchor(conn, anchor);
         layer_surface.set_margin(conn, 0, 0, 0, 0);
         layer_surface.set_keyboard_interactivity(conn, WlrLayerKeyboard::None);
-        layer_surface.set_size(conn, 5, 5);
+        layer_surface.set_size(conn, 500, 100);
+
         wl_surface.commit(conn);
 
         self.layer_surface = Some(layer_surface);
@@ -148,6 +163,11 @@ impl State {
                         wl_registry.bind(&conn, name, interface, version);
                     self.wl_compositor = Some(wl_compositor);
                 }
+                "wp_viewporter" => {
+                    let viewporter: WpViewporter =
+                        wl_registry.bind(&conn, name, interface, version);
+                    self.viewporter = Some(viewporter);
+                }
                 "zwlr_layer_shell_v1" => {
                     let wlr_layer_shell: WlrLayerShell =
                         wl_registry.bind(&conn, name, interface, version);
@@ -156,7 +176,13 @@ impl State {
                 "wp_single_pixel_buffer_manager_v1" => {
                     let spm: WpSinglePixelBufferMgr =
                         wl_registry.bind(&conn, name, interface, version);
-                    let wl_buffer = spm.create_buffer(conn, (u32::MAX / 255) * 255, (u32::MAX / 255) * 0, (u32::MAX / 255) * 0, u32::MAX);
+                    let wl_buffer = spm.create_buffer(
+                        conn,
+                        (u32::MAX / 255) * 255,
+                        (u32::MAX / 255) * 0,
+                        (u32::MAX / 255) * 0,
+                        u32::MAX,
+                    );
                     self.callbacks.push((wl_buffer.id, Self::on_wlbuffer_event));
                     self.wl_buffer = Some(wl_buffer);
                     spm.destroy(conn);
@@ -179,13 +205,19 @@ impl State {
                 width,
                 height,
             } => {
+                if let Some(ref viewport) = self.viewport {
+                    viewport.set_destination(conn, width as i32, height as i32);
+                }
                 layer_surface.ack_configure(conn, serial);
                 if !self.configured {
                     let Some(wl_surface) = self.wl_surface.as_ref() else {
+                        unreachable!();
                         return;
                     };
                     layer_surface.set_size(conn, width, height);
+                    conn.flush();
                     wl_surface.attach(conn, self.wl_buffer.as_ref(), 0, 0);
+                    // wl_surface.damage_buffer(conn, 0, 0, 500, 100);
                     wl_surface.commit(conn);
                     self.configured = true;
                 }
@@ -213,8 +245,7 @@ impl State {
             return; // this should never be reached
         };
         match wl_buffer.parse_event(event) {
-            WlBufferEvent::Release => {
-            }
+            WlBufferEvent::Release => {}
         }
     }
 }

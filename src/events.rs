@@ -144,7 +144,7 @@ impl<'a> EventDataParser<'a> {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
-        self.idx.replace(idx + core::mem::size_of::<i32>());
+        self.idx.replace(idx + core::mem::size_of::<u32>());
         num
     }
 }

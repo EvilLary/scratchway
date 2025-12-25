@@ -5,10 +5,9 @@ pub mod xdg_shell;
 pub mod viewporter;
 pub mod wlr_layer_shell_unstable_v1;
 pub mod core;
+pub mod xdg_decoration_unstable_v1;
 
 pub trait Object {
-    type Event;
-
     fn from_id(id: u32) -> Self;
 
     #[inline(always)]
@@ -16,9 +15,9 @@ pub trait Object {
 
     fn interface(&self) -> &'static str;
 
-    fn parse_event_obj<T>(&self, event: crate::events::Event<'_>) -> T {
-        todo!()
-    }
+    // fn parse_event_obj<T>(&self, event: crate::events::Event<'_>) -> T {
+    //     todo!()
+    // }
 }
 
 macro_rules! impl_obj_prox {
@@ -29,7 +28,6 @@ macro_rules! impl_obj_prox {
             pub interface: &'static str,
         }
         impl Object for $prox {
-            type Event = u32;
             fn from_id(id: u32) -> Self {
                 Self {
                     id,

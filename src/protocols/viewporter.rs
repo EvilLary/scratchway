@@ -12,6 +12,7 @@ impl WpViewporter {
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg.data());
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -29,6 +30,7 @@ impl WpViewporter {
         let mut msg = Message::<16>::new(self.id, Self::GET_VIEW_OP);
         msg.write_u32(id).write_u32(wl_surface.id()).build();
         conn.write_request(msg.data());
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_viewport(new_id: {}, wl_surface: {})",
             self.interface, self.id, id, wl_surface.id
@@ -50,6 +52,7 @@ impl WpViewport {
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg.data());
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -69,6 +72,7 @@ impl WpViewport {
             .write_fixed(h)
             .build();
         conn.write_request(msg.data());
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_source(x: {}, y: {}, w: {}, h: {})",
             self.interface, self.id, x, y, w, h
@@ -84,6 +88,7 @@ impl WpViewport {
         let mut msg = Message::<16>::new(self.id, Self::SET_DESTINATION_OP);
         msg.write_i32(w).write_i32(h).build();
         conn.write_request(msg.data());
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_destination(w: {}, h: {})",
             self.interface, self.id, w, h

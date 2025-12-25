@@ -1,7 +1,7 @@
 use crate::connection::Connection;
-use crate::protocols::impl_obj_prox;
-use crate::protocols::core::*;
 use crate::events::*;
+use crate::protocols::core::*;
+use crate::protocols::impl_obj_prox;
 
 pub use crate::protocols::Object;
 
@@ -22,6 +22,7 @@ impl XdgWmBase {
 
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -29,11 +30,10 @@ impl XdgWmBase {
         conn.write_request(msg.data());
     }
 
-    pub fn get_xdg_surface(
-        &self, conn: &Connection, wl_surface: &WlSurface,
-    ) -> XdgSurface {
+    pub fn get_xdg_surface(&self, conn: &Connection, wl_surface: &WlSurface) -> XdgSurface {
         let id = conn.new_id();
         let mut msg = Message::<16>::new(self.id, Self::GET_XDGSURFACE_OP);
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_xdg_surface(new_id: {}, wl_surface: {})",
             self.interface, self.id, id, wl_surface.id
@@ -53,6 +53,7 @@ impl XdgWmBase {
 
     pub fn pong(&self, conn: &Connection, serial: u32) {
         let mut msg = Message::<12>::new(self.id, Self::PONG_OP);
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.pong(serial: {})",
             self.interface, self.id, serial
@@ -64,6 +65,7 @@ impl XdgWmBase {
     pub fn parse_event(&self, event: Event<'_>) -> XdgWmBaseEvent {
         if event.header.opcode == Self::PING_OP {
             let serial = event.parser().get_u32();
+            #[cfg(debug_assertions)]
             eprintln!(
                 "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.ping(serial: {})",
                 self.interface, self.id, serial
@@ -93,6 +95,7 @@ impl XdgSurface {
         let parser = event.parser();
         if event.header.opcode == Self::CONFIGURE_OP {
             let serial = parser.get_u32();
+            #[cfg(debug_assertions)]
             eprintln!(
                 "[\x1b[32mDEBUG\x1b[0m]: {}#{}.configure(serial: {})",
                 self.interface, self.id, serial
@@ -104,6 +107,7 @@ impl XdgSurface {
 
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -118,6 +122,7 @@ impl XdgSurface {
             .write_i32(w)
             .write_i32(h)
             .build();
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_window_geometry(x: {}, y: {}, w: {}, h: {})",
             self.interface, self.id, x, y, w, h
@@ -128,6 +133,7 @@ impl XdgSurface {
     pub fn ack_configure(&self, conn: &Connection, serial: u32) {
         let mut msg = Message::<12>::new(self.id, Self::ACK_CONFIGURE_OP);
         msg.write_u32(serial).build();
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.ack_configure(serial: {})",
             self.interface, self.id, serial
@@ -139,6 +145,7 @@ impl XdgSurface {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::GET_TOPLEVEL_OP);
         msg.write_u32(id).build();
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_toplevel(new_id: {})",
             self.interface, self.id, id
@@ -185,6 +192,7 @@ impl XdgToplevel {
                 let width = parser.get_i32();
                 let height = parser.get_i32();
                 let states = parser.get_array_u32();
+                #[cfg(debug_assertions)]
                 eprintln!(
                     "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.configure(width: {}, height: {}, states: {:?})",
                     self.interface, self.id, width, height, states
@@ -198,6 +206,7 @@ impl XdgToplevel {
             Self::CONFIGURE_BOUNDS_OP => {
                 let width = parser.get_i32();
                 let height = parser.get_i32();
+                #[cfg(debug_assertions)]
                 eprintln!(
                     "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.configure_bounds(width: {}, height: {})",
                     self.interface, self.id, width, height
@@ -205,6 +214,7 @@ impl XdgToplevel {
                 XdgToplevelEvent::ConfigureBounds { width, height }
             }
             Self::CLOSE_OP => {
+                #[cfg(debug_assertions)]
                 eprintln!(
                     "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.close()",
                     self.interface, self.id
@@ -213,6 +223,7 @@ impl XdgToplevel {
             }
             Self::WM_CAPABILITIES_OP => {
                 let capabilities = parser.get_array_u32();
+                #[cfg(debug_assertions)]
                 eprintln!(
                     "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.wm_capabilities(capabilities: {:?})",
                     self.interface, self.id, capabilities
@@ -226,6 +237,7 @@ impl XdgToplevel {
 
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -237,6 +249,7 @@ impl XdgToplevel {
         let mut msg = Message::<64>::new(self.id, Self::SET_TITLE_OP);
         msg.write_str(title.as_ref()).build();
         conn.write_request(msg.data());
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(title: {})",
             self.interface,
@@ -249,6 +262,7 @@ impl XdgToplevel {
         let mut msg = Message::<64>::new(self.id, Self::SET_APP_ID_OP);
         msg.write_str(app_id.as_ref()).build();
         conn.write_request(msg.data());
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(app_id: {})",
             self.interface,

@@ -13,6 +13,7 @@ impl WpSinglePixelBufferMgr {
 
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -31,6 +32,7 @@ impl WpSinglePixelBufferMgr {
             .write_u32(b)
             .write_u32(a)
             .build();
+        #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_buffer(new_id: {}, r: {}, g: {}, b: {}, a: {})",
             self.interface, self.id, id, r, g, b, a
