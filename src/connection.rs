@@ -4,7 +4,7 @@
 use crate::events::*;
 use std::{
     cell::Cell,
-    io::{IoSlice, Read, Write},
+    io::{self, IoSlice, Read, Write},
     os::{
         fd::{AsRawFd, RawFd},
         unix::net::UnixStream,
@@ -81,6 +81,32 @@ impl Connection {
         }
     }
 
+    pub fn dispatch_events<S: State>(&mut self, state: &mut S) -> io::Result<()> {
+        let read = self.read_events()?;
+        let events = EventIter::new(&self.in_buffer.as_slice()[..read]);
+        for event in events {
+            state.handle_event(self, event);
+        }
+        Ok(())
+    }
+
+    fn read_events(&mut self) -> io::Result<usize> {
+        self.flush()?;
+        let read = unsafe {
+            libc::recv(
+                self.display_fd(),
+                self.in_buffer.as_mut_ptr().cast(),
+                self.in_buffer.len(),
+                libc::MSG_NOSIGNAL,
+            )
+        };
+        if read <= 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(read as usize)
+        }
+    }
+
     pub fn blocking_read<'a>(&'a self) -> EventIter<'a> {
         let _ = self.flush();
         let conn = self.get_mut();
@@ -100,13 +126,6 @@ impl Connection {
         EventIter::new(&self.in_buffer.as_slice()[..read as usize])
     }
 
-    pub(crate) fn add_fd(&self, fd: RawFd) {}
-
-    fn fflush(&self) -> std::io::Result<()> {
-        // let iov = IoSlice::new(&self.out_buffer);
-        self.get_mut().socket.flush()
-    }
-
     pub fn flush(&self) -> std::io::Result<()> {
         let me = self.get_mut();
         // FIXME
@@ -124,11 +143,20 @@ impl Connection {
         Ok(())
     }
 
-    pub fn roundtrip(&self, state: &mut impl State) -> std::io::Result<()> {
+    pub fn roundtrip(&mut self, state: &mut impl State) -> std::io::Result<()> {
         let display = self.display();
         let wl_callback = display.sync(self);
-        self.flush();
-        todo!()
+        let read = self.read_events()?;
+        let events = EventIter::new(&self.in_buffer.as_slice()[..read]);
+        for event in events {
+            if event.header.id == wl_callback.id {
+                break;
+            }
+            state.handle_event(self, event);
+        }
+        // self.dispatch_events(state)?;
+        Ok(())
+        // todo!()
     }
 }
 

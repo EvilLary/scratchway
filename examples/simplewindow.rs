@@ -223,6 +223,8 @@ impl State {
                 {
                     // wl_surface.set_buffer_scale(conn, 2);
                     // wl_surface.set_buffer_transform(conn, WlOutputTransform::Flipped270);
+                    wl_surface.set_buffer_transform(conn, WlOutputTransform::D90);
+                    wl_surface.set_input_region(conn, None);
                     wl_surface.attach(conn, Some(wl_buffer), 0, 0);
                     wl_surface.commit(conn);
                     self.configured = true;
@@ -301,15 +303,17 @@ impl State {
     }
 
     fn on_wlbuffer(&mut self, conn: &Connection, event: Event<'_>) {
-        // let Some(wl_buffer) = self.wl_buffer.as_ref() else {
-        //     return; // this should never be reached
-        // };
-        // match wl_buffer.parse_event(event) {
-        //     WlBufferEvent::Release => {
-        //         // self.draw(conn);
-        //         // std::thread::sleep(std::time::Duration::from_millis(1000));
-        //     }
-        // }
+        let Some(wl_buffer) = self.wl_buffer.as_ref() else {
+            return; // this should never be reached
+        };
+        match wl_buffer.parse_event(event) {
+            WlBufferEvent::Release => {
+                // wl_buffer.destroy(conn);
+                // self.wl_buffer = None;
+                // self.draw(conn);
+                // std::thread::sleep(std::time::Duration::from_millis(1000));
+            }
+        }
     }
 
     fn init_toplevel(&mut self, conn: &Connection) {
@@ -483,6 +487,10 @@ impl State {
         wl_surface.attach(conn, Some(wl_buffer), 0, 0);
         // wl_surface.damage_buffer(conn, dmgbox.x, dmgbox.y, dmgbox.w, dmgbox.h);
         wl_surface.commit(conn);
+        // unsafe {
+        //     libc::free(self.shm_data.cast());
+        //     self.shm_data = core::ptr::null_mut()
+        // }
     }
 
     fn cleanup(&self) {
