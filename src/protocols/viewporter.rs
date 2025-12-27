@@ -11,7 +11,7 @@ impl WpViewporter {
 
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
@@ -29,7 +29,7 @@ impl WpViewporter {
         let id = conn.new_id();
         let mut msg = Message::<16>::new(self.id, Self::GET_VIEW_OP);
         msg.write_u32(id).write_u32(wl_surface.id()).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_viewport(new_id: {}, wl_surface: {})",
@@ -51,7 +51,7 @@ impl WpViewport {
     ///  The change is applied on the next wl_surface.commit.
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
@@ -71,7 +71,7 @@ impl WpViewport {
             .write_fixed(w)
             .write_fixed(h)
             .build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_source(x: {}, y: {}, w: {}, h: {})",
@@ -87,7 +87,7 @@ impl WpViewport {
     pub fn set_destination(&self, conn: &Connection, w: i32, h: i32) {
         let mut msg = Message::<16>::new(self.id, Self::SET_DESTINATION_OP);
         msg.write_i32(w).write_i32(h).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_destination(w: {}, h: {})",

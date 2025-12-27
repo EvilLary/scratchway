@@ -38,7 +38,7 @@ impl WlDisplay {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::GET_REGISTRY_OP);
         msg.write_u32(id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         WlRegistry::from_id(id)
     }
 
@@ -51,7 +51,7 @@ impl WlDisplay {
             self.interface, self.id, id,
         );
         msg.write_u32(id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         Object::from_id(id)
     }
 
@@ -121,7 +121,7 @@ impl WlRegistry {
             .write_u32(version)
             .write_u32(id)
             .build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.bind(new_id: {}, name: {}, interface: {}, version: {})",
@@ -206,7 +206,7 @@ impl WlSeat {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::GET_POINTER_OP);
         msg.write_u32(id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_pointer(new_id: {})",
@@ -219,7 +219,7 @@ impl WlSeat {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::GET_TOUCH_OP);
         msg.write_u32(id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_touch(new_id: {})",
@@ -232,7 +232,7 @@ impl WlSeat {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::GET_KEYBOARD_OP);
         msg.write_u32(id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_keyboard(new_id: {})",
@@ -243,7 +243,7 @@ impl WlSeat {
 
     pub fn release(&self, conn: &mut Connection) {
         let mut msg = Message::<8>::new(self.id, Self::RELEASE_OP);
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 }
 
@@ -467,7 +467,7 @@ impl WlKeyboard {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.release()",
             self.interface, self.id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
     pub fn parse_event(&self, event: Event<'_>) -> WlKeyboardEvent<'_> {
         let parser = event.parser();
@@ -589,7 +589,7 @@ impl WlCompositor {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::CREATE_SURFACE_OP);
         msg.write_u32(id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_surface(new_id: {})",
@@ -602,7 +602,7 @@ impl WlCompositor {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::CREATE_REGION_OP);
         msg.write_u32(id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_region(new_id: {})",
@@ -692,7 +692,7 @@ impl WlSurface {
     }
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
@@ -709,7 +709,7 @@ impl WlSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.attach(wl_buffer: {}, x: {}, y: {})",
             self.interface, self.id, buf_id, x, y
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn damage(&self, conn: &Connection, x: i32, y: i32, w: i32, h: i32) {
@@ -724,7 +724,7 @@ impl WlSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.damage(x: {}, y: {}, w: {}, h: {})",
             self.interface, self.id, x, y, w, h
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     // TODO
@@ -735,7 +735,7 @@ impl WlSurface {
     //         .write_i32(w)
     //         .write_i32(h)
     //         .build();
-    //     conn.write_request(msg.data());
+    //     conn.write_request(msg);
     // }
 
     pub fn set_opaque_region(&self, conn: &Connection, wl_region: Option<WlRegion>) {
@@ -747,7 +747,7 @@ impl WlSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_opaque_region(wl_region: {})",
             self.interface, self.id, reg_id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn set_input_region(&self, conn: &Connection, wl_region: Option<WlRegion>) {
@@ -759,7 +759,7 @@ impl WlSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_input_region(wl_region: {})",
             self.interface, self.id, reg_id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn commit(&self, conn: &Connection) {
@@ -769,7 +769,7 @@ impl WlSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.commit()",
             self.interface, self.id,
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn set_buffer_transform(&self, conn: &Connection, transform: WlOutputTransform) {
@@ -781,7 +781,7 @@ impl WlSurface {
             self.interface, self.id, transform
         );
         msg.write_i32(transform).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn set_buffer_scale(&self, conn: &Connection, scale: i32) {
@@ -792,7 +792,7 @@ impl WlSurface {
             self.interface, self.id, scale
         );
         msg.write_i32(scale).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn damage_buffer(&self, conn: &Connection, x: i32, y: i32, w: i32, h: i32) {
@@ -807,7 +807,7 @@ impl WlSurface {
             .write_i32(w)
             .write_i32(h)
             .build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn offset(&self, conn: &Connection, x: i32, y: i32) {
@@ -818,7 +818,7 @@ impl WlSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.offset(x: {}, y: {})",
             self.interface, self.id, x, y
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 }
 
@@ -851,7 +851,7 @@ impl WlBuffer {
 
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
@@ -980,7 +980,7 @@ impl WlOutput {
             "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.release()",
             self.interface, self.id,
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn parse_event(&self, event: Event<'_>) -> WlOutputEvent<'_> {
@@ -1091,7 +1091,7 @@ impl WlShmPool {
             "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: {}#{}.create_buffer(new_id: {}, offset: {}, w: {}, h: {}, stride: {}, format: {})",
             self.interface, self.id, id, offset, w, h, stride, format
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         Object::from_id(id)
     }
 }

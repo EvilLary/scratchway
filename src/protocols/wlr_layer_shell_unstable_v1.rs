@@ -42,7 +42,7 @@ impl WlrLayerShell {
             .write_u32(layer as u32)
             .write_str(namespace)
             .build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_layer_surface(new_id: {}, surface: {}, output: {}, layer: {}, namespace: {})",
             self.interface, self.id, id, surface.id, output_id, layer as u32, namespace,
@@ -52,7 +52,7 @@ impl WlrLayerShell {
 
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -93,7 +93,7 @@ impl WlrLayerSurface {
     pub fn set_size(&self, conn: &Connection, w: u32, h: u32) {
         let mut msg = Message::<16>::new(self.id, Self::SET_SIZE_OP);
         msg.write_u32(w).write_u32(h).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_size(w: {}, h: {})",
             self.interface, self.id, w, h
@@ -103,7 +103,7 @@ impl WlrLayerSurface {
     pub fn set_anchor(&self, conn: &Connection, anchor: u32) {
         let mut msg = Message::<12>::new(self.id, Self::SET_ANCHOR_OP);
         msg.write_u32(anchor).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_anchor(anchor: {})",
             self.interface, self.id, anchor
@@ -113,7 +113,7 @@ impl WlrLayerSurface {
     pub fn set_exclusive_zone(&self, conn: &Connection, zone: i32) {
         let mut msg = Message::<12>::new(self.id, Self::SET_EXCLUSIVE_ZONE);
         msg.write_i32(zone).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_exclusive_zone(zone: {})",
             self.interface, self.id, zone
@@ -127,7 +127,7 @@ impl WlrLayerSurface {
             .write_i32(bottom)
             .write_i32(left)
             .build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_margin(t: {}, r: {}, b: {}, l: {})",
             self.interface, self.id, top, right, bottom, left
@@ -139,7 +139,7 @@ impl WlrLayerSurface {
     ) {
         let mut msg = Message::<12>::new(self.id, Self::SET_KEYBOARD_INTERACTIVITY_OP);
         msg.write_u32(keyboard_interactivity as u32).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_keyboard_interactivity(keyboard_interactivity: {})",
             self.interface, self.id, keyboard_interactivity as u32
@@ -154,7 +154,7 @@ impl WlrLayerSurface {
     pub fn ack_configure(&self, conn: &Connection, serial: u32) {
         let mut msg = Message::<12>::new(self.id, Self::ACK_CONFIGURE_OP);
         msg.write_u32(serial).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.ack_configure(serial: {})",
             self.interface, self.id, serial
@@ -163,7 +163,7 @@ impl WlrLayerSurface {
 
     pub fn destroy(&self, conn: &Connection, serial: u32) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
@@ -173,7 +173,7 @@ impl WlrLayerSurface {
     pub fn set_layer(&self, conn: &Connection, layer: WlrLayer) {
         let mut msg = Message::<12>::new(self.id, Self::SET_LAYER_OP);
         msg.write_u32(layer as u32).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_layer(layer: {})",
             self.interface, self.id, layer as u32
@@ -183,7 +183,7 @@ impl WlrLayerSurface {
     pub fn set_exclusive_edge(&self, conn: &Connection, edge: u32) {
         let mut msg = Message::<12>::new(self.id, Self::SET_EXCLUSIVE_EDGE_OP);
         msg.write_u32(edge).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_exclusive_edge(edge: {})",
             self.interface, self.id, edge

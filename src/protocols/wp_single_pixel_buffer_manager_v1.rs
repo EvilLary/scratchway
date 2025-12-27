@@ -18,7 +18,7 @@ impl WpSinglePixelBufferMgr {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn create_buffer(
@@ -37,7 +37,7 @@ impl WpSinglePixelBufferMgr {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_buffer(new_id: {}, r: {}, g: {}, b: {}, a: {})",
             self.interface, self.id, id, r, g, b, a
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         Object::from_id(id)
     }
 }

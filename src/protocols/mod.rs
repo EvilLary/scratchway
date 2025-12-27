@@ -22,7 +22,7 @@ pub trait Object {
 
 macro_rules! impl_obj_prox {
     ($prox:ident, $interface:literal) => {
-        #[derive(Debug)]
+        #[derive(Debug, Copy, Clone)]
         pub struct $prox {
             pub id: u32,
             pub interface: &'static str,
@@ -44,16 +44,17 @@ macro_rules! impl_obj_prox {
             //     todo!()
             // }
         }
-        impl PartialEq<$prox> for u32 {
-            fn eq(&self, other: &$prox) -> bool {
-                *self == other.id()
-            }
-        }
+        // impl PartialEq<$prox> for u32 {
+        //     fn eq(&self, other: &$prox) -> bool {
+        //         *self == other.id()
+        //     }
+        // }
         impl PartialEq<u32> for $prox {
             fn eq(&self, other: &u32) -> bool {
                 self.id() == *other
             }
         }
+        impl Eq for $prox {}
         impl<O: Object> PartialEq<O> for $prox {
             fn eq(&self, other: &O) -> bool {
                 self.id() == other.id()

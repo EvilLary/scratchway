@@ -55,20 +55,20 @@ type Callback = fn(&mut State, &Connection, Event<'_>);
 struct State {
     callbacks: Vec<(u32, Callback)>,
 
-    wl_display: WlDisplay,
-    wl_registry: Option<WlRegistry>,
-    wl_compositor: Option<WlCompositor>,
-    viewporter: Option<WpViewporter>,
+    wl_display:      WlDisplay,
+    wl_registry:     Option<WlRegistry>,
+    wl_compositor:   Option<WlCompositor>,
+    viewporter:      Option<WpViewporter>,
     wlr_layer_shell: Option<WlrLayerShell>,
 
-    wl_surface: Option<WlSurface>,
-    viewport: Option<WpViewport>,
-    wl_buffer: Option<WlBuffer>,
+    wl_surface:    Option<WlSurface>,
+    viewport:      Option<WpViewport>,
+    wl_buffer:     Option<WlBuffer>,
     layer_surface: Option<WlrLayerSurface>,
-    configured: bool,
+    configured:    bool,
 
-    window_height: i32,
-    window_width: i32,
+    window_height:       i32,
+    window_width:        i32,
     window_size_changed: bool,
 
     exit: bool,
@@ -109,13 +109,15 @@ impl State {
             self.viewport = Some(viewport);
         }
 
-        let anchor = WlrLayerSurface::ANCHOR_TOP;
+        let anchor = WlrLayerSurface::ANCHOR_TOP
+            | WlrLayerSurface::ANCHOR_LEFT
+            | WlrLayerSurface::ANCHOR_RIGHT;
 
-        layer_surface.set_exclusive_zone(conn, 100);
+        layer_surface.set_keyboard_interactivity(conn, WlrLayerKeyboard::None);
+        layer_surface.set_exclusive_zone(conn, 30);
         layer_surface.set_anchor(conn, anchor);
         layer_surface.set_margin(conn, 0, 0, 0, 0);
-        layer_surface.set_keyboard_interactivity(conn, WlrLayerKeyboard::None);
-        layer_surface.set_size(conn, 500, 100);
+        layer_surface.set_size(conn, 0, 30);
 
         wl_surface.commit(conn);
 
@@ -144,7 +146,9 @@ impl State {
                 eprintln!("Protocol error: code {code} from object {object_id}, {message}");
                 self.exit = true;
             }
-            WlDisplayEvent::DeleteId { id } => self.callbacks.retain(|(obj_id, _)| id != *obj_id),
+            WlDisplayEvent::DeleteId {
+                id,
+            } => self.callbacks.retain(|(obj_id, _)| id != *obj_id),
         }
     }
 
@@ -178,10 +182,10 @@ impl State {
                         wl_registry.bind(&conn, name, interface, version);
                     let wl_buffer = spm.create_buffer(
                         conn,
-                        (u32::MAX / 255) * 255,
-                        (u32::MAX / 255) * 0,
-                        (u32::MAX / 255) * 0,
-                        u32::MAX,
+                        (u32::MAX / 255) * 71,
+                        (u32::MAX / 255) * 150,
+                        (u32::MAX / 255) * 220,
+                        (u32::MAX / 255) * ((50 * 255) / 100),
                     );
                     self.callbacks.push((wl_buffer.id, Self::on_wlbuffer_event));
                     self.wl_buffer = Some(wl_buffer);
@@ -189,7 +193,9 @@ impl State {
                 }
                 _ => {}
             },
-            WlRegistryEvent::GlobalRemove { name } => {
+            WlRegistryEvent::GlobalRemove {
+                name,
+            } => {
                 println!("Removed: {:?}", name);
             }
         }
@@ -233,10 +239,18 @@ impl State {
             return;
         };
         match wl_surface.parse_event(event) {
-            WlSurfaceEvent::Enter { output } => {}
-            WlSurfaceEvent::Leave { output } => {}
-            WlSurfaceEvent::PrefferedBufferScale { factor } => {}
-            WlSurfaceEvent::PrefferedBufferTransform { transform } => {}
+            WlSurfaceEvent::Enter {
+                output,
+            } => {}
+            WlSurfaceEvent::Leave {
+                output,
+            } => {}
+            WlSurfaceEvent::PrefferedBufferScale {
+                factor,
+            } => {}
+            WlSurfaceEvent::PrefferedBufferTransform {
+                transform,
+            } => {}
         }
     }
 

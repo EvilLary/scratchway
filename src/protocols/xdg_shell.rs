@@ -27,7 +27,7 @@ impl XdgWmBase {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn get_xdg_surface(&self, conn: &Connection, wl_surface: &WlSurface) -> XdgSurface {
@@ -39,7 +39,7 @@ impl XdgWmBase {
             self.interface, self.id, id, wl_surface.id
         );
         msg.write_u32(id).write_u32(wl_surface.id).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         Object::from_id(id)
     }
 
@@ -59,7 +59,7 @@ impl XdgWmBase {
             self.interface, self.id, serial
         );
         msg.write_u32(serial).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn parse_event(&self, event: Event<'_>) -> XdgWmBaseEvent {
@@ -112,7 +112,7 @@ impl XdgSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn set_window_geometry(&self, conn: &Connection, x: i32, y: i32, w: i32, h: i32) {
@@ -127,7 +127,7 @@ impl XdgSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_window_geometry(x: {}, y: {}, w: {}, h: {})",
             self.interface, self.id, x, y, w, h
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn ack_configure(&self, conn: &Connection, serial: u32) {
@@ -138,7 +138,7 @@ impl XdgSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.ack_configure(serial: {})",
             self.interface, self.id, serial
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn get_toplevel(&self, conn: &Connection) -> XdgToplevel {
@@ -150,7 +150,7 @@ impl XdgSurface {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_toplevel(new_id: {})",
             self.interface, self.id, id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         Object::from_id(id)
     }
 }
@@ -242,13 +242,13 @@ impl XdgToplevel {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn set_title(&self, conn: &Connection, title: impl AsRef<str>) {
         let mut msg = Message::<64>::new(self.id, Self::SET_TITLE_OP);
         msg.write_str(title.as_ref()).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(title: {})",
@@ -261,7 +261,7 @@ impl XdgToplevel {
     pub fn set_app_id(&self, conn: &Connection, app_id: impl AsRef<str>) {
         let mut msg = Message::<64>::new(self.id, Self::SET_APP_ID_OP);
         msg.write_str(app_id.as_ref()).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(app_id: {})",

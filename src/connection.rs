@@ -63,12 +63,12 @@ impl Connection {
         self.id_counter.get_new()
     }
 
-    pub(crate) fn write_request(&self, msg: &[u8]) {
+    pub(crate) fn write_request<const S: usize>(&self, msg: Message<S>) {
         // TODO: check buffer len to flush
-        if !self.out_buffer.can_fit(msg.len()) {
+        if !self.out_buffer.can_fit(msg.data().len()) {
             self.flush();
         }
-        self.get_mut().out_buffer.extend_from_slice(msg);
+        self.get_mut().out_buffer.extend_from_slice(msg.data());
         // self.get_mut().socket.write(msg);
     }
 

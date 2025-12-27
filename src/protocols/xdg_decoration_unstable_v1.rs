@@ -18,7 +18,7 @@ impl XdgDecorationManager {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 
     pub fn get_toplevel_decoration(
@@ -27,7 +27,7 @@ impl XdgDecorationManager {
         let id = conn.new_id();
         let mut msg = Message::<16>::new(self.id, Self::GET_TOPLEVEL_DECORATION_OP);
         msg.write_u32(id).write_u32(toplevel.id()).build();
-        conn.write_request(msg.data());
+        conn.write_request(msg);
         #[cfg(debug_assertions)]
         eprintln!(
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_toplevel_decoration(new_id: {}, toplevel: {})",
@@ -56,6 +56,6 @@ impl XdgToplevelDecoration {
             "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
             self.interface, self.id
         );
-        conn.write_request(msg.data());
+        conn.write_request(msg);
     }
 }

@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct EventIter<'a> {
     buf: &'a [u8],
 }
@@ -15,18 +15,29 @@ impl<'a> Iterator for EventIter<'a> {
     type Item = Event<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // let header_size = Header::HEADER_SIZE;
         if self.buf.len() < Header::HEADER_SIZE {
             return None;
         }
         let header = &self.buf[0..Header::HEADER_SIZE];
         let header = Header::from_slice(header);
 
+        // FIXME: Implement some mechanism to keep old data there
         if self.buf.len() < header.size as usize {
+            eprintln!(
+                "[\x1b[32mERROR\x1b[0m]: Recieived buffer is less than advertised size in the header: {:?},
+                discarding the entire buffer",
+                header
+            );
             return None;
         }
 
-        let data = &self.buf[Header::HEADER_SIZE..header.size as usize];
+        let Some(data) = self.buf.get(Header::HEADER_SIZE..header.size as usize) else {
+            eprintln!(
+                "[\x1b[32mERROR\x1b[0m]: Malformed event with header: {:?}, discarding the entire buffer",
+                header
+            );
+            return None; // Thanks kwin
+        };
 
         if self.buf.len() <= header.size as usize {
             self.buf = &[];
@@ -37,7 +48,7 @@ impl<'a> Iterator for EventIter<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Event<'a> {
     pub header: Header,
     pub data: &'a [u8],
@@ -49,7 +60,7 @@ impl<'a> Event<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Header {
     pub id: u32,
@@ -64,13 +75,21 @@ impl Header {
     }
     pub fn from_slice(slice: &[u8]) -> Self {
         debug_assert_eq!(slice.len(), std::mem::size_of::<Self>());
-        let id = u32::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]);
-        let opcode = u16::from_ne_bytes([slice[4], slice[5]]);
-        let size = u16::from_ne_bytes([slice[6], slice[7]]);
-        Self { id, opcode, size }
+        // Safety: We've already asserted slice length
+        // The safe ugly way is not different from using transmute
+        unsafe {
+            core::mem::transmute_copy::<[u8; Self::HEADER_SIZE], Self>(
+                &slice.try_into().unwrap_unchecked(),
+            )
+        }
+        // let id = u32::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]);
+        // let opcode = u16::from_ne_bytes([slice[4], slice[5]]);
+        // let size = u16::from_ne_bytes([slice[6], slice[7]]);
+        // Self { id, opcode, size }
     }
 }
 
+// #[derive(Debug, Clone, Copy)]
 pub struct EventDataParser<'a> {
     pub data: &'a [u8],
     idx: Cell<usize>,
@@ -153,7 +172,7 @@ fn roundup(value: usize, mul: usize) -> usize {
     (((value - 1) / mul) + 1) * mul
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message<const S: usize> {
     buf: [u8; S],
     len: usize,

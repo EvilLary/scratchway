@@ -62,7 +62,7 @@ impl<T, const S: usize> Bucket<T, S> {
     }
 
     pub fn push(&mut self, item: T) {
-        assert!(self.len < S);
+        debug_assert!(self.len < S);
         unsafe {
             core::ptr::write(self.as_mut_ptr().add(self.len), item);
             self.len += 1;

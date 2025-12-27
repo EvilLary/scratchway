@@ -35,8 +35,8 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    state.cleanup();
-
+    // state.cleanup(&conn);
+    conn.flush()?;
     Ok(())
 }
 
@@ -296,7 +296,10 @@ impl State {
                 }
             }
             // XdgToplevelEvent::ConfigureBounds { width, height } => {}
-            XdgToplevelEvent::Close => self.exit = true,
+            XdgToplevelEvent::Close => {
+                self.cleanup(conn);
+                self.exit = true
+            },
             // XdgToplevelEvent::WmCapabilities { capabilities } => {}
             _ => {}
         }
@@ -400,6 +403,10 @@ impl State {
         let wl_shm = self.wl_shm.as_ref().unwrap();
         let wl_shm_pool = wl_shm.create_pool(conn, self.shm_fd, self.shm_pool_size);
         let wl_buffer = wl_shm_pool.create_buffer(conn, 0, self.width, self.height, self.stride, 1);
+        // unsafe {
+        //     libc::close(self.shm_fd);
+        //     self.shm_fd = 0;
+        // }
         // wl_shm_pool.destroy(conn);
 
         self.callbacks.push((wl_buffer.id, Self::on_wlbuffer));
@@ -493,7 +500,7 @@ impl State {
         // }
     }
 
-    fn cleanup(&self) {
+    fn cleanup(&self, conn: &Connection) {
         unsafe {
             if self.shm_fd != 0 {
                 libc::close(self.shm_fd);
@@ -505,5 +512,40 @@ impl State {
                 );
             }
         }
+
+        if let Some(ref o) = self.wl_buffer {
+            o.destroy(conn);
+        }
+
+        if let Some(ref o) = self.xdg_toplevel {
+            o.destroy(conn);
+        }
+
+
+        if let Some(ref o) = self.viewport {
+            o.destroy(conn);
+        }
+
+        if let Some(ref o) = self.viewporter {
+            o.destroy(conn);
+        }
+
+        if let Some(ref o) = self.xdg_surface {
+            o.destroy(conn);
+        }
+
+        if let Some(ref o) = self.xdg_wm_base {
+            o.destroy(conn);
+        }
+
+        // conn.flush();
+
+        if let Some(ref o) = self.wl_surface {
+            o.destroy(conn);
+        }
+
+        // if let Some(ref o) = self.wl_pointer {
+        //     o.release(conn);
+        // }
     }
 }
