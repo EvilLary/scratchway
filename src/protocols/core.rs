@@ -2,6 +2,7 @@
 use crate::connection::Connection;
 use crate::events::*;
 use crate::protocols::impl_obj_prox;
+use std::intrinsics::likely;
 
 pub use crate::protocols::Object;
 
@@ -27,6 +28,31 @@ pub enum WlDisplayEvent<'a> {
 
 impl_obj_prox!(WlCallback, "wl_callback");
 
+pub enum WlCallbackEvent {
+    Done { data: i32 },
+}
+
+impl WlCallback {
+    pub(crate) const DONE_OP: u16 = 0;
+    pub fn parse_event(&self, event: Event<'_>) -> WlCallbackEvent {
+        let parser = event.parser();
+        if likely(event.header.id == self.id) {
+            let data = parser.get_i32();
+            if *crate::connection::DEBUG {
+                eprintln!(
+                    "[\x1b[32mDEBUG\x1b[0m]: {}#{}.done(data: {})",
+                    self.interface, self.id, data,
+                );
+            }
+            WlCallbackEvent::Done {
+                data,
+            }
+        } else {
+            unreachable!("Bruh");
+        }
+    }
+}
+
 impl WlDisplay {
     pub(crate) const SYNC_OP: u16 = 0;
     pub(crate) const GET_REGISTRY_OP: u16 = 1;
@@ -39,17 +65,24 @@ impl WlDisplay {
         let mut msg = Message::<12>::new(self.id, Self::GET_REGISTRY_OP);
         msg.write_u32(id).build();
         conn.write_request(msg);
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_registry(new id: {})",
+                self.interface, self.id, id,
+            );
+        }
         WlRegistry::from_id(id)
     }
 
     pub fn sync(&self, conn: &Connection) -> WlCallback {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, 0);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.sync(new id: {})",
-            self.interface, self.id, id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.sync(new id: {})",
+                self.interface, self.id, id,
+            );
+        }
         msg.write_u32(id).build();
         conn.write_request(msg);
         Object::from_id(id)
@@ -62,11 +95,12 @@ impl WlDisplay {
                 let object_id = parser.get_u32();
                 let code = parser.get_u32();
                 let message = parser.get_string();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[31mERROR\x1b[0m]: ==> {}#{}.error(object_id: {}, code: {}, message: {})",
-                    self.interface, self.id, object_id, code, message
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[31mERROR\x1b[0m]: ==> {}#{}.error(object_id: {}, code: {}, message: {})",
+                        self.interface, self.id, object_id, code, message
+                    );
+                }
                 WlDisplayEvent::Error {
                     object_id,
                     code,
@@ -76,11 +110,12 @@ impl WlDisplay {
             Self::DELETE_ID_OP => {
                 let id = parser.get_u32();
                 // if conn.debug {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.delete_id(id: {})",
-                    self.interface, self.id, id,
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.delete_id(id: {})",
+                        self.interface, self.id, id,
+                    );
+                }
                 // }
                 WlDisplayEvent::DeleteId {
                     id,
@@ -122,11 +157,12 @@ impl WlRegistry {
             .write_u32(id)
             .build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.bind(new_id: {}, name: {}, interface: {}, version: {})",
-            self.interface, self.id, id, name, interface, version
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.bind(new_id: {}, name: {}, interface: {}, version: {})",
+                self.interface, self.id, id, name, interface, version
+            );
+        }
         <O as Object>::from_id(id)
     }
 
@@ -137,20 +173,30 @@ impl WlRegistry {
                 let name = parser.get_u32();
                 let interface = parser.get_string();
                 let version = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.global(name: {}, interface: {}, version: {})",
-                    self.interface, self.id, name, interface, version
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.global(name: {}, interface: {}, version: {})",
+                        self.interface, self.id, name, interface, version
+                    );
+                }
                 WlRegistryEvent::Global {
                     name,
                     interface,
                     version,
                 }
             }
-            Self::GLOBAL_REMOVE_OP => WlRegistryEvent::GlobalRemove {
-                name: parser.get_u32(),
-            },
+            Self::GLOBAL_REMOVE_OP => {
+                let name = parser.get_u32();
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.global_remvoe(name: {})",
+                        self.interface, self.id, name
+                    );
+                }
+                WlRegistryEvent::GlobalRemove {
+                    name,
+                }
+            }
             _ => unreachable!(),
         }
     }
@@ -178,22 +224,24 @@ impl WlSeat {
         match event.header.opcode {
             Self::NAME_OP => {
                 let name = parser.get_string();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.name(name: {})",
-                    self.interface, self.id, name
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.name(name: {})",
+                        self.interface, self.id, name
+                    );
+                }
                 WlSeatEvent::Name {
                     name,
                 }
             }
             Self::CAPABILITIES_OP => {
                 let capabilities = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.name(capabilities: {})",
-                    self.interface, self.id, capabilities
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.name(capabilities: {})",
+                        self.interface, self.id, capabilities
+                    );
+                }
                 WlSeatEvent::Capabilities {
                     capabilities,
                 }
@@ -207,11 +255,12 @@ impl WlSeat {
         let mut msg = Message::<12>::new(self.id, Self::GET_POINTER_OP);
         msg.write_u32(id).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_pointer(new_id: {})",
-            self.interface, self.id, id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_pointer(new_id: {})",
+                self.interface, self.id, id,
+            );
+        }
         WlPointer::from_id(id)
     }
 
@@ -220,11 +269,12 @@ impl WlSeat {
         let mut msg = Message::<12>::new(self.id, Self::GET_TOUCH_OP);
         msg.write_u32(id).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_touch(new_id: {})",
-            self.interface, self.id, id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_touch(new_id: {})",
+                self.interface, self.id, id,
+            );
+        }
         WlTouch::from_id(id)
     }
 
@@ -233,11 +283,12 @@ impl WlSeat {
         let mut msg = Message::<12>::new(self.id, Self::GET_KEYBOARD_OP);
         msg.write_u32(id).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_keyboard(new_id: {})",
-            self.interface, self.id, id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_keyboard(new_id: {})",
+                self.interface, self.id, id,
+            );
+        }
         WlKeyboard::from_id(id)
     }
 
@@ -322,6 +373,17 @@ impl WlPointer {
     pub(crate) const BUTTON_OP: u16 = 3;
     pub(crate) const AXIS_OP: u16 = 4;
     pub(crate) const FRAME_OP: u16 = 5;
+
+    pub fn release(&self, conn: &Connection) {
+        let msg = Message::<8>::new(self.id, Self::RELEASE_OP);
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.release()",
+                self.interface, self.id
+            );
+        }
+        conn.write_request(msg);
+    }
     pub fn parse_event(&self, event: Event<'_>) -> WlPointerEvent {
         let mut parser = event.parser();
         match event.header.opcode {
@@ -330,11 +392,12 @@ impl WlPointer {
                 let surface = parser.get_u32();
                 let surface_x = parser.get_fixed();
                 let surface_y = parser.get_fixed();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.enter(serial: {}, surface: {}, surface_x: {:0.2}, surface_y: {:0.2})",
-                    self.interface, self.id, serial, surface, surface_x, surface_y
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.enter(serial: {}, surface: {}, surface_x: {:0.2}, surface_y: {:0.2})",
+                        self.interface, self.id, serial, surface, surface_x, surface_y
+                    );
+                }
                 WlPointerEvent::Enter {
                     serial,
                     surface,
@@ -345,11 +408,12 @@ impl WlPointer {
             Self::LEAVE_OP => {
                 let serial = parser.get_u32();
                 let surface = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.leave(serial: {}, surface: {})",
-                    self.interface, self.id, serial, surface
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.leave(serial: {}, surface: {})",
+                        self.interface, self.id, serial, surface
+                    );
+                }
                 WlPointerEvent::Leave {
                     serial,
                     surface,
@@ -359,11 +423,12 @@ impl WlPointer {
                 let time = parser.get_u32();
                 let surface_x = parser.get_fixed();
                 let surface_y = parser.get_fixed();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.motion(serial: {}, x: {:0.2}, y: {:.2})",
-                    self.interface, self.id, time, surface_x, surface_y
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.motion(serial: {}, x: {:0.2}, y: {:.2})",
+                        self.interface, self.id, time, surface_x, surface_y
+                    );
+                }
                 WlPointerEvent::Motion {
                     time,
                     surface_x,
@@ -375,11 +440,12 @@ impl WlPointer {
                 let time = parser.get_u32();
                 let button = parser.get_u32();
                 let state = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.button(serial: {}, time: {}, button: {}, state: {})",
-                    self.interface, self.id, serial, time, button, state
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.button(serial: {}, time: {}, button: {}, state: {})",
+                        self.interface, self.id, serial, time, button, state
+                    );
+                }
                 WlPointerEvent::Button {
                     serial,
                     time,
@@ -391,11 +457,12 @@ impl WlPointer {
                 let time = parser.get_u32();
                 let axis = parser.get_u32();
                 let value = parser.get_fixed();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.axis(time: {}, axis: {}, value: {:.2})",
-                    self.interface, self.id, time, axis, value
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.axis(time: {}, axis: {}, value: {:.2})",
+                        self.interface, self.id, time, axis, value
+                    );
+                }
                 WlPointerEvent::Axis {
                     time,
                     axis: axis.into(),
@@ -403,11 +470,12 @@ impl WlPointer {
                 }
             }
             Self::FRAME_OP => {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.frame()",
-                    self.interface, self.id
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.frame()",
+                        self.interface, self.id
+                    );
+                }
                 WlPointerEvent::Frame
             }
             _ => todo!("Dummy forgor opcode: {}", event.header.opcode),
@@ -462,11 +530,12 @@ impl WlKeyboard {
 
     pub fn release(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::RELEASE_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.release()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.release()",
+                self.interface, self.id
+            );
+        }
         conn.write_request(msg);
     }
     pub fn parse_event(&self, event: Event<'_>) -> WlKeyboardEvent<'_> {
@@ -475,11 +544,12 @@ impl WlKeyboard {
             Self::KEYMAP_OP => {
                 let format = parser.get_u32();
                 let size = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.keymap(format: {}, size: {})",
-                    self.interface, self.id, format, size,
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.keymap(format: {}, size: {})",
+                        self.interface, self.id, format, size,
+                    );
+                }
                 WlKeyboardEvent::Keymap {
                     format,
                     size,
@@ -489,11 +559,12 @@ impl WlKeyboard {
                 let serial = parser.get_u32();
                 let surface = parser.get_u32();
                 let keys = parser.get_array_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.enter(serial: {}, surface: {}, keys: {:?})",
-                    self.interface, self.id, serial, surface, keys
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.enter(serial: {}, surface: {}, keys: {:?})",
+                        self.interface, self.id, serial, surface, keys
+                    );
+                }
                 WlKeyboardEvent::Enter {
                     serial,
                     surface,
@@ -503,11 +574,12 @@ impl WlKeyboard {
             Self::LEAVE_OP => {
                 let serial = parser.get_u32();
                 let surface = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.leave(serial: {}, surface: {})",
-                    self.interface, self.id, serial, surface
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.leave(serial: {}, surface: {})",
+                        self.interface, self.id, serial, surface
+                    );
+                }
                 WlKeyboardEvent::Leave {
                     serial,
                     surface,
@@ -518,11 +590,12 @@ impl WlKeyboard {
                 let time = parser.get_u32();
                 let key = parser.get_u32();
                 let state = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.key(serial: {}, time: {}, key: {}, state: {})",
-                    self.interface, self.id, serial, time, key, state
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.key(serial: {}, time: {}, key: {}, state: {})",
+                        self.interface, self.id, serial, time, key, state
+                    );
+                }
                 WlKeyboardEvent::Key {
                     serial,
                     time,
@@ -536,11 +609,12 @@ impl WlKeyboard {
                 let mods_latched = parser.get_u32();
                 let mods_locked = parser.get_u32();
                 let group = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.modifiers(serial: {}, mods_depressed: {}, mods_latched: {}, mods_locked: {})",
-                    self.interface, self.id, serial, mods_depressed, mods_latched, mods_locked
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.modifiers(serial: {}, mods_depressed: {}, mods_latched: {}, mods_locked: {})",
+                        self.interface, self.id, serial, mods_depressed, mods_latched, mods_locked
+                    );
+                }
                 WlKeyboardEvent::Modifiers {
                     serial,
                     mods_depressed,
@@ -552,11 +626,12 @@ impl WlKeyboard {
             Self::REPEAT_INFO_OP => {
                 let rate = parser.get_u32();
                 let delay = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.repeat_info(rate: {}, delay: {})",
-                    self.interface, self.id, rate, delay
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.repeat_info(rate: {}, delay: {})",
+                        self.interface, self.id, rate, delay
+                    );
+                }
                 WlKeyboardEvent::RepeatInfo {
                     rate,
                     delay,
@@ -590,11 +665,12 @@ impl WlCompositor {
         let mut msg = Message::<12>::new(self.id, Self::CREATE_SURFACE_OP);
         msg.write_u32(id).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_surface(new_id: {})",
-            self.interface, self.id, id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_surface(new_id: {})",
+                self.interface, self.id, id,
+            );
+        }
         WlSurface::from_id(id)
     }
 
@@ -603,11 +679,12 @@ impl WlCompositor {
         let mut msg = Message::<12>::new(self.id, Self::CREATE_REGION_OP);
         msg.write_u32(id).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_region(new_id: {})",
-            self.interface, self.id, id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_region(new_id: {})",
+                self.interface, self.id, id,
+            );
+        }
         WlRegion::from_id(id)
     }
 }
@@ -645,44 +722,48 @@ impl WlSurface {
         match event.header.opcode {
             Self::ENTER_OP => {
                 let output = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: {}#{}.enter(output: {})",
-                    self.interface, self.id, output,
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: {}#{}.enter(output: {})",
+                        self.interface, self.id, output,
+                    );
+                }
                 WlSurfaceEvent::Enter {
                     output,
                 }
             }
             Self::LEAVE_OP => {
                 let output = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: {}#{}.leave(output: {})",
-                    self.interface, self.id, output,
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: {}#{}.leave(output: {})",
+                        self.interface, self.id, output,
+                    );
+                }
                 WlSurfaceEvent::Leave {
                     output,
                 }
             }
             Self::PREFERRED_BUFFER_TRANSFORM_OP => {
                 let transform = parser.get_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: {}#{}.preffered_buffer_transform(transform: {})",
-                    self.interface, self.id, transform,
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: {}#{}.preffered_buffer_transform(transform: {})",
+                        self.interface, self.id, transform,
+                    );
+                }
                 WlSurfaceEvent::PrefferedBufferTransform {
                     transform: WlOutputTransform::from(transform),
                 }
             }
             Self::PREFERED_BUFFER_SCALE_OP => {
                 let factor = parser.get_i32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: {}#{}.preffered_buffer_scale(scale: {})",
-                    self.interface, self.id, factor,
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: {}#{}.preffered_buffer_scale(scale: {})",
+                        self.interface, self.id, factor,
+                    );
+                }
                 WlSurfaceEvent::PrefferedBufferScale {
                     factor,
                 }
@@ -693,22 +774,24 @@ impl WlSurface {
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
     }
 
     pub fn attach(&self, conn: &Connection, wl_buffer: Option<&WlBuffer>, x: i32, y: i32) {
         let mut msg = Message::<20>::new(self.id, Self::ATTACH_OP);
         let buf_id = wl_buffer.map_or(0, |buf| buf.id);
         msg.write_u32(buf_id).write_i32(x).write_i32(y).build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.attach(wl_buffer: {}, x: {}, y: {})",
-            self.interface, self.id, buf_id, x, y
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.attach(wl_buffer: {}, x: {}, y: {})",
+                self.interface, self.id, buf_id, x, y
+            );
+        }
         conn.write_request(msg);
     }
 
@@ -719,11 +802,12 @@ impl WlSurface {
             .write_i32(w)
             .write_i32(h)
             .build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.damage(x: {}, y: {}, w: {}, h: {})",
-            self.interface, self.id, x, y, w, h
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.damage(x: {}, y: {}, w: {}, h: {})",
+                self.interface, self.id, x, y, w, h
+            );
+        }
         conn.write_request(msg);
     }
 
@@ -742,11 +826,12 @@ impl WlSurface {
         let mut msg = Message::<12>::new(self.id, Self::SET_OPAQUE_REGION_OP);
         let reg_id = wl_region.map_or(0, |w| w.id);
         msg.write_u32(reg_id).build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_opaque_region(wl_region: {})",
-            self.interface, self.id, reg_id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_opaque_region(wl_region: {})",
+                self.interface, self.id, reg_id
+            );
+        }
         conn.write_request(msg);
     }
 
@@ -754,54 +839,59 @@ impl WlSurface {
         let mut msg = Message::<12>::new(self.id, Self::SET_INPUT_REGION_OP);
         let reg_id = wl_region.map_or(0, |w| w.id);
         msg.write_u32(reg_id).build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_input_region(wl_region: {})",
-            self.interface, self.id, reg_id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_input_region(wl_region: {})",
+                self.interface, self.id, reg_id
+            );
+        }
         conn.write_request(msg);
     }
 
     pub fn commit(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::COMMIT_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.commit()",
-            self.interface, self.id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.commit()",
+                self.interface, self.id,
+            );
+        }
         conn.write_request(msg);
     }
 
     pub fn set_buffer_transform(&self, conn: &Connection, transform: WlOutputTransform) {
         let mut msg = Message::<12>::new(self.id, Self::SET_BUFFER_TRANSFORM_OP);
         let transform = transform as i32;
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_buffer_transform(transform: {})",
-            self.interface, self.id, transform
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_buffer_transform(transform: {})",
+                self.interface, self.id, transform
+            );
+        }
         msg.write_i32(transform).build();
         conn.write_request(msg);
     }
 
     pub fn set_buffer_scale(&self, conn: &Connection, scale: i32) {
         let mut msg = Message::<12>::new(self.id, Self::SET_BUFFER_SCALE_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_buffer_scale(scale: {})",
-            self.interface, self.id, scale
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_buffer_scale(scale: {})",
+                self.interface, self.id, scale
+            );
+        }
         msg.write_i32(scale).build();
         conn.write_request(msg);
     }
 
     pub fn damage_buffer(&self, conn: &Connection, x: i32, y: i32, w: i32, h: i32) {
         let mut msg = Message::<24>::new(self.id, Self::DAMANGE_BUFFER_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.damage_buffer(x: {}, y: {}, w: {}, h: {})",
-            self.interface, self.id, x, y, w, h
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.damage_buffer(x: {}, y: {}, w: {}, h: {})",
+                self.interface, self.id, x, y, w, h
+            );
+        }
         msg.write_i32(x)
             .write_i32(y)
             .write_i32(w)
@@ -813,11 +903,12 @@ impl WlSurface {
     pub fn offset(&self, conn: &Connection, x: i32, y: i32) {
         let mut msg = Message::<16>::new(self.id, Self::OFFSET_OP);
         msg.write_i32(x).write_i32(y).build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.offset(x: {}, y: {})",
-            self.interface, self.id, x, y
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.offset(x: {}, y: {})",
+                self.interface, self.id, x, y
+            );
+        }
         conn.write_request(msg);
     }
 }
@@ -839,11 +930,12 @@ impl WlBuffer {
     pub(crate) const RELEASE_OP: u16 = 0;
     pub fn parse_event(&self, event: Event<'_>) -> WlBufferEvent {
         if event.header.opcode == Self::RELEASE_OP {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.release()",
-                self.interface, self.id,
-            );
+            if *crate::connection::DEBUG {
+                eprintln!(
+                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.release()",
+                    self.interface, self.id,
+                );
+            }
             return WlBufferEvent::Release;
         }
         unreachable!()
@@ -852,11 +944,12 @@ impl WlBuffer {
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id,
+            );
+        }
     }
 }
 
@@ -975,43 +1068,119 @@ impl WlOutput {
 
     pub fn release(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::RELEASE_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.release()",
-            self.interface, self.id,
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.release()",
+                self.interface, self.id,
+            );
+        }
         conn.write_request(msg);
     }
 
     pub fn parse_event(&self, event: Event<'_>) -> WlOutputEvent<'_> {
         let parser = event.parser();
         match event.header.opcode {
-            Self::GEOMETRY_OP => WlOutputEvent::Geometry {
-                x:          parser.get_i32(),
-                y:          parser.get_i32(),
-                physical_w: parser.get_i32(),
-                physical_h: parser.get_i32(),
-                subpixel:   WlOutputSubPixel::from(parser.get_i32()),
-                make:       parser.get_string(),
-                model:      parser.get_string(),
-                transform:  WlOutputTransform::from(parser.get_u32()),
-            },
-            Self::MODE_OP => WlOutputEvent::Mode {
-                flags:   WlOutputMode::from(parser.get_i32()),
-                width:   parser.get_i32(),
-                height:  parser.get_i32(),
-                refresh: parser.get_i32(),
-            },
-            Self::DONE_OP => WlOutputEvent::Done,
-            Self::SCALE_OP => WlOutputEvent::Scale {
-                factor: parser.get_i32(),
-            },
-            Self::NAME_OP => WlOutputEvent::Name {
-                name: parser.get_string(),
-            },
-            Self::DESCRIPTION_OP => WlOutputEvent::Description {
-                description: parser.get_string(),
-            },
+            Self::GEOMETRY_OP => {
+                let (x, y, physical_w, physical_h, subpixel, make, model, transform) = (
+                    parser.get_i32(),
+                    parser.get_i32(),
+                    parser.get_i32(),
+                    parser.get_i32(),
+                    WlOutputSubPixel::from(parser.get_i32()),
+                    parser.get_string(),
+                    parser.get_string(),
+                    WlOutputTransform::from(parser.get_u32()),
+                );
+
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.geometry(x: {}, y: {}, phy_w: {}, phy_h: {}, subpixel: {}, make: {}, model: {}, transform: {})",
+                        self.interface,
+                        self.id,
+                        x,
+                        y,
+                        physical_w,
+                        physical_h,
+                        subpixel as i32,
+                        make,
+                        model,
+                        transform as u32,
+                    );
+                }
+                WlOutputEvent::Geometry {
+                    x,
+                    y,
+                    physical_w,
+                    physical_h,
+                    subpixel,
+                    make,
+                    model,
+                    transform,
+                }
+            }
+            Self::MODE_OP => {
+                let flags = WlOutputMode::from(parser.get_i32());
+                let width = parser.get_i32();
+                let height = parser.get_i32();
+                let refresh = parser.get_i32();
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.mode(flags: {}, w: {}, h: {}, refresh: {})",
+                        self.interface, self.id, flags as i32, width, height, refresh,
+                    );
+                }
+                WlOutputEvent::Mode {
+                    flags,
+                    width,
+                    height,
+                    refresh,
+                }
+            }
+            Self::DONE_OP => {
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.done()",
+                        self.interface, self.id,
+                    );
+                }
+                WlOutputEvent::Done
+            }
+            Self::SCALE_OP => {
+                let factor = parser.get_i32();
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.scale(factor: {})",
+                        self.interface, self.id, factor
+                    );
+                }
+                WlOutputEvent::Scale {
+                    factor,
+                }
+            }
+            Self::NAME_OP => {
+                let name = parser.get_string();
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.name(name: {})",
+                        self.interface, self.id, name,
+                    );
+                }
+                WlOutputEvent::Name {
+                    name,
+                }
+            }
+            Self::DESCRIPTION_OP => {
+                let description = parser.get_string();
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.description(description: {})",
+                        self.interface, self.id, description
+                    );
+                }
+                WlOutputEvent::Description {
+                    description,
+                }
+            }
             _ => unreachable!(),
         }
     }
@@ -1023,48 +1192,17 @@ impl WlShm {
     pub(crate) const CREATE_POOL: u16 = 0;
 
     pub fn create_pool(&self, conn: &Connection, fd: i32, size: i32) -> WlShmPool {
-        conn.flush();
-
         let id = conn.new_id();
         let mut msg = Message::<20>::new(self.id, 0);
         msg.write_u32(id).write_i32(size).build();
-
-        unsafe {
-            let mut buf = [0i8; unsafe { libc::CMSG_SPACE(size_of::<i32>() as u32) as usize }];
-            let mut io = libc::iovec {
-                iov_base: msg.data_mut().as_mut_ptr().cast(),
-                iov_len:  msg.data().len(),
-            };
-            let mut msghdr = libc::msghdr {
-                msg_iov:        &mut io as *mut _,
-                msg_iovlen:     1,
-                msg_control:    &mut buf[..] as *mut [i8] as *mut _,
-                msg_controllen: buf.len(),
-                msg_name:       core::ptr::null_mut(),
-                msg_namelen:    0,
-                msg_flags:      0,
-            };
-
-            let mut cmsghdr = libc::CMSG_FIRSTHDR(&msghdr as *const _);
-
-            (*cmsghdr).cmsg_len = libc::CMSG_LEN(4) as usize;
-            (*cmsghdr).cmsg_level = libc::SOL_SOCKET;
-            (*cmsghdr).cmsg_type = libc::SCM_RIGHTS;
-
-            *(libc::CMSG_DATA(cmsghdr) as *mut libc::c_int) = fd;
-            msghdr.msg_controllen = libc::CMSG_SPACE(size_of::<i32>() as u32) as usize;
-
-            if libc::sendmsg(conn.display_fd(), &msghdr as *const libc::msghdr, 0) == -1 {
-                panic!("Failed to sendmsg, {}", std::io::Error::last_os_error());
-            }
-            libc::close(fd);
+        conn.write_request(msg);
+        conn.add_fd(fd);
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_shm#{}.create_pool(wl_shm_pool#{}, fd: {}, size: {})",
+                self.id, id, fd, size
+            );
         }
-
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: wl_shm#{}.create_pool(wl_shm_pool#{}, fd: {}, size: {})",
-            self.id, id, fd, size
-        );
         Object::from_id(id)
     }
 }
@@ -1086,11 +1224,12 @@ impl WlShmPool {
             .write_i32(stride)
             .write_u32(format)
             .build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: {}#{}.create_buffer(new_id: {}, offset: {}, w: {}, h: {}, stride: {}, format: {})",
-            self.interface, self.id, id, offset, w, h, stride, format
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "\x1b[32m\x1b[32m[DEBUG]\x1b[0m\x1b[0m: {}#{}.create_buffer(new_id: {}, offset: {}, w: {}, h: {}, stride: {}, format: {})",
+                self.interface, self.id, id, offset, w, h, stride, format
+            );
+        }
         conn.write_request(msg);
         Object::from_id(id)
     }

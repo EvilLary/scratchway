@@ -1,7 +1,7 @@
 use crate::connection::Connection;
-use crate::protocols::impl_obj_prox;
-use crate::protocols::core::*;
 use crate::events::*;
+use crate::protocols::core::*;
+use crate::protocols::impl_obj_prox;
 
 pub use crate::protocols::Object;
 
@@ -43,20 +43,26 @@ impl WlrLayerShell {
             .write_str(namespace)
             .build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_layer_surface(new_id: {}, surface: {}, output: {}, layer: {}, namespace: {})",
-            self.interface, self.id, id, surface.id, output_id, layer as u32, namespace,
-        );
+
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_layer_surface(new_id: {}, surface: {}, output: {}, layer: {}, namespace: {})",
+                self.interface, self.id, id, surface.id, output_id, layer as u32, namespace,
+            );
+        }
         Object::from_id(id)
     }
 
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
     }
 }
 
@@ -64,7 +70,7 @@ impl WlrLayerShell {
 pub enum WlrLayerSurfaceEvent {
     Configure {
         serial: u32,
-        width: u32,
+        width:  u32,
         height: u32,
     },
     Closed,
@@ -94,30 +100,36 @@ impl WlrLayerSurface {
         let mut msg = Message::<16>::new(self.id, Self::SET_SIZE_OP);
         msg.write_u32(w).write_u32(h).build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_size(w: {}, h: {})",
-            self.interface, self.id, w, h
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_size(w: {}, h: {})",
+                self.interface, self.id, w, h
+            );
+        }
     }
 
     pub fn set_anchor(&self, conn: &Connection, anchor: u32) {
         let mut msg = Message::<12>::new(self.id, Self::SET_ANCHOR_OP);
         msg.write_u32(anchor).build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_anchor(anchor: {})",
-            self.interface, self.id, anchor
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_anchor(anchor: {})",
+                self.interface, self.id, anchor
+            );
+        }
     }
 
     pub fn set_exclusive_zone(&self, conn: &Connection, zone: i32) {
         let mut msg = Message::<12>::new(self.id, Self::SET_EXCLUSIVE_ZONE);
         msg.write_i32(zone).build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_exclusive_zone(zone: {})",
-            self.interface, self.id, zone
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_exclusive_zone(zone: {})",
+                self.interface, self.id, zone
+            );
+        }
     }
 
     pub fn set_margin(&self, conn: &Connection, top: i32, right: i32, bottom: i32, left: i32) {
@@ -128,10 +140,12 @@ impl WlrLayerSurface {
             .write_i32(left)
             .build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_margin(t: {}, r: {}, b: {}, l: {})",
-            self.interface, self.id, top, right, bottom, left
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_margin(t: {}, r: {}, b: {}, l: {})",
+                self.interface, self.id, top, right, bottom, left
+            );
+        }
     }
 
     pub fn set_keyboard_interactivity(
@@ -140,10 +154,12 @@ impl WlrLayerSurface {
         let mut msg = Message::<12>::new(self.id, Self::SET_KEYBOARD_INTERACTIVITY_OP);
         msg.write_u32(keyboard_interactivity as u32).build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_keyboard_interactivity(keyboard_interactivity: {})",
-            self.interface, self.id, keyboard_interactivity as u32
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_keyboard_interactivity(keyboard_interactivity: {})",
+                self.interface, self.id, keyboard_interactivity as u32
+            );
+        }
     }
 
     // TODO
@@ -155,39 +171,47 @@ impl WlrLayerSurface {
         let mut msg = Message::<12>::new(self.id, Self::ACK_CONFIGURE_OP);
         msg.write_u32(serial).build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.ack_configure(serial: {})",
-            self.interface, self.id, serial
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.ack_configure(serial: {})",
+                self.interface, self.id, serial
+            );
+        }
     }
 
     pub fn destroy(&self, conn: &Connection, serial: u32) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
     }
 
     pub fn set_layer(&self, conn: &Connection, layer: WlrLayer) {
         let mut msg = Message::<12>::new(self.id, Self::SET_LAYER_OP);
         msg.write_u32(layer as u32).build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_layer(layer: {})",
-            self.interface, self.id, layer as u32
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_layer(layer: {})",
+                self.interface, self.id, layer as u32
+            );
+        }
     }
 
     pub fn set_exclusive_edge(&self, conn: &Connection, edge: u32) {
         let mut msg = Message::<12>::new(self.id, Self::SET_EXCLUSIVE_EDGE_OP);
         msg.write_u32(edge).build();
         conn.write_request(msg);
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_exclusive_edge(edge: {})",
-            self.interface, self.id, edge
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_exclusive_edge(edge: {})",
+                self.interface, self.id, edge
+            );
+        }
     }
 
     pub fn parse_event(&self, event: Event<'_>) -> WlrLayerSurfaceEvent {
@@ -197,10 +221,12 @@ impl WlrLayerSurface {
                 let serial = parser.get_u32();
                 let width = parser.get_u32();
                 let height = parser.get_u32();
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: {}#{}.configure(serial: {}, w: {}, h: {})",
-                    self.interface, self.id, serial, width, height
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: {}#{}.configure(serial: {}, w: {}, h: {})",
+                        self.interface, self.id, serial, width, height
+                    );
+                }
                 WlrLayerSurfaceEvent::Configure {
                     serial,
                     width,
@@ -208,10 +234,12 @@ impl WlrLayerSurface {
                 }
             }
             Self::CLOSED_OP => {
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.closed()",
-                    self.interface, self.id
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.closed()",
+                        self.interface, self.id
+                    );
+                }
                 WlrLayerSurfaceEvent::Closed
             }
             _ => unreachable!(),

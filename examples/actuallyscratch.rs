@@ -744,6 +744,7 @@ impl State {
                 let serial = parser.get_u32();
                 let surface = parser.get_u32();
 
+                // self.set_cursor_shape(socket, 8, serial);
                 if self.debug {
                     eprintln!(
                         "\x1b[32m[DEBUG]\x1b[0m: => wl_pointer#{}.leave(serial: {serial}, surface: {surface})",

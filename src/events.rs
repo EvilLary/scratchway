@@ -6,8 +6,10 @@ pub struct EventIter<'a> {
 }
 
 impl<'a> EventIter<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
-        EventIter { buf: data }
+    pub fn new(buf: &'a [u8]) -> Self {
+        Self {
+            buf,
+        }
     }
 }
 
@@ -44,14 +46,18 @@ impl<'a> Iterator for EventIter<'a> {
         } else {
             self.buf = &self.buf[header.size as usize..];
         }
-        Some(Event { header, data })
+
+        Some(Event {
+            header,
+            data,
+        })
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Event<'a> {
     pub header: Header,
-    pub data: &'a [u8],
+    pub data:   &'a [u8],
 }
 
 impl<'a> Event<'a> {
@@ -63,15 +69,19 @@ impl<'a> Event<'a> {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Header {
-    pub id: u32,
+    pub id:     u32,
     pub opcode: u16,
-    pub size: u16,
+    pub size:   u16,
 }
 
 impl Header {
     pub const HEADER_SIZE: usize = size_of::<Self>();
     pub fn new(id: u32, opcode: u16, size: u16) -> Self {
-        Self { id, opcode, size }
+        Self {
+            id,
+            opcode,
+            size,
+        }
     }
     pub fn from_slice(slice: &[u8]) -> Self {
         debug_assert_eq!(slice.len(), std::mem::size_of::<Self>());
@@ -82,17 +92,13 @@ impl Header {
                 &slice.try_into().unwrap_unchecked(),
             )
         }
-        // let id = u32::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]);
-        // let opcode = u16::from_ne_bytes([slice[4], slice[5]]);
-        // let size = u16::from_ne_bytes([slice[6], slice[7]]);
-        // Self { id, opcode, size }
     }
 }
 
 // #[derive(Debug, Clone, Copy)]
 pub struct EventDataParser<'a> {
     pub data: &'a [u8],
-    idx: Cell<usize>,
+    idx:      Cell<usize>,
 }
 
 impl<'a> EventDataParser<'a> {
@@ -137,6 +143,7 @@ impl<'a> EventDataParser<'a> {
         let str = &data[..str_len - 1];
         self.idx.replace(idx + padded_len);
 
+        // FIXME: This should be removed once migrating to a dipatcher model is done
         // SAFETY: the reference behind message is valid for as long
         // as the event.data is valid, Rust just can't know it
         unsafe {
@@ -152,7 +159,7 @@ impl<'a> EventDataParser<'a> {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let array = unsafe {
-            let ptr = data[..array_len].as_ptr() as *const u32;
+            let ptr = data[..array_len].as_ptr().cast();
             core::slice::from_raw_parts(ptr, array_len / size_of::<u32>())
         };
         self.idx.replace(idx + array_len);
@@ -224,7 +231,8 @@ impl<const S: usize> Message<S> {
         self
     }
 
-    pub fn write_str(&mut self, str: &str) -> &mut Self {
+    pub fn write_str(&mut self, str: impl AsRef<str>) -> &mut Self {
+        let str = str.as_ref();
         // null included
         self.write_u32((str.len() + 1) as u32);
         self.buf[self.len..str.len() + self.len].copy_from_slice(str.as_bytes());

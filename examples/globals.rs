@@ -13,6 +13,9 @@ fn main()  -> std::io::Result<()> {
 
     conn.roundtrip(&mut app)?;
 
+    loop {
+        conn.dispatch_events(&mut app)?;
+    }
     Ok(())
 }
 
@@ -22,6 +25,6 @@ struct App {
 
 impl State for App {
     fn handle_event(&mut self, _conn: &Connection, event: scratchway::events::Event<'_>) {
-        println!("{:?}", self.registry.parse_event(event));
+        let _ = self.registry.parse_event(event);
     }
 }

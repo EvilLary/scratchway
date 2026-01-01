@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use scratchway::connection::Connection;
+use scratchway::connection::State;
 use scratchway::events::Event;
 use scratchway::protocols::core::*;
 use scratchway::protocols::viewporter::*;
@@ -11,38 +12,47 @@ use clibs::cairo;
 mod clibs;
 
 fn main() -> std::io::Result<()> {
-    let conn = Connection::connect()?;
+    let mut conn = Connection::connect()?;
 
     let wl_display = conn.display();
     let wl_registry = wl_display.get_registry(&conn);
 
     let mut callbacks: Vec<(u32, Callback)> = Vec::with_capacity(16);
 
-    callbacks.push((wl_registry.id(), State::on_wlregistry));
-    callbacks.push((wl_display.id(), State::on_wldisplay));
+    callbacks.push((wl_registry.id(), App::on_wlregistry));
+    callbacks.push((wl_display.id(), App::on_wldisplay));
 
-    let mut state = State {
+    let mut state = App {
         wl_display,
         wl_registry: Some(wl_registry),
         callbacks,
         ..Default::default()
     };
 
+    conn.roundtrip(&mut state);
     while !state.exit {
-        let events = conn.blocking_read();
-        for event in events {
-            state.handle_event(&conn, event);
-        }
+        conn.dispatch_events(&mut state);
     }
 
     // state.cleanup(&conn);
-    conn.flush()?;
     Ok(())
 }
 
-type Callback = fn(&mut State, &Connection, Event<'_>);
+impl State for App {
+    fn handle_event(&mut self, conn: &Connection, event: Event<'_>) {
+        if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
+            cb(self, conn, event)
+        } else {
+            eprintln!(
+                "[\x1b[33mWARNING\x1b[0m]: Unhandled event for id: {}, opcode: {}",
+                event.header.id, event.header.opcode
+            )
+        }
+    }
+}
+type Callback = fn(&mut App, &Connection, Event<'_>);
 #[derive(Debug, Default)]
-struct State {
+struct App {
     callbacks: Vec<(u32, Callback)>,
 
     wl_display:    WlDisplay,
@@ -77,18 +87,7 @@ struct State {
     exit: bool,
 }
 
-impl State {
-    pub fn handle_event(&mut self, conn: &Connection, event: Event<'_>) {
-        if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
-            cb(self, conn, event)
-        } else {
-            eprintln!(
-                "[\x1b[33mWARNING\x1b[0m]: Unhandled event for id: {}, opcode: {}",
-                event.header.id, event.header.opcode
-            )
-        }
-    }
-
+impl App {
     fn on_wlseat(&mut self, conn: &Connection, event: Event) {
         let wl_seat = unsafe { self.wl_seat.as_ref().unwrap_unchecked() };
         match wl_seat.parse_event(event) {
@@ -513,6 +512,10 @@ impl State {
             }
         }
 
+        if let Some(ref o) = self.wl_pointer {
+            o.release(conn);
+        }
+
         if let Some(ref o) = self.wl_buffer {
             o.destroy(conn);
         }
@@ -538,14 +541,8 @@ impl State {
             o.destroy(conn);
         }
 
-        // conn.flush();
-
         if let Some(ref o) = self.wl_surface {
             o.destroy(conn);
         }
-
-        // if let Some(ref o) = self.wl_pointer {
-        //     o.release(conn);
-        // }
     }
 }

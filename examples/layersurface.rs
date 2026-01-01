@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use scratchway::connection::Connection;
+use scratchway::connection::State;
 use scratchway::events::Event;
 use scratchway::protocols::core::*;
 use scratchway::protocols::viewporter::*;
@@ -8,57 +9,67 @@ use scratchway::protocols::wlr_layer_shell_unstable_v1::*;
 use scratchway::protocols::wp_single_pixel_buffer_manager_v1::*;
 
 fn main() -> std::io::Result<()> {
-    let conn = Connection::connect()?;
-    let target_output = std::env::vars().skip(1).next();
+    let mut conn = Connection::connect()?;
+    let target_output = std::env::args().skip(1).next();
 
     let wl_display = conn.display();
     let wl_registry = wl_display.get_registry(&conn);
 
     let mut callbacks: Vec<(u32, Callback)> = vec![
-        (wl_registry.id, State::on_registry_event),
-        (wl_display.id, State::on_wldisplay_event),
+        (wl_registry.id, WaylandState::on_registry_event),
+        (wl_display.id, WaylandState::on_wldisplay_event),
     ];
 
-    let mut state = State {
+    let mut state = WaylandState {
         wl_display,
         wl_registry: Some(wl_registry),
         callbacks,
         ..Default::default()
     };
 
-    let events = conn.blocking_read();
-    for event in events {
-        state.handle_event(&conn, event);
-    }
+    conn.roundtrip(&mut state);
 
     if state.wlr_layer_shell.is_none() {
         eprintln!("Compositor doesn't support zwlr_layer_shell_v1 protocol");
         std::process::exit(1);
     }
 
-    conn.flush()?;
+    if state.wl_buffer.is_none() {
+        eprintln!("Compositor doesn't support wp_single_pixel_buffer_manager_v1 protocol");
+        std::process::exit(1);
+    }
 
-    state.init_layer(&conn);
+    conn.roundtrip(&mut state);
+
+    state.init_layer(&conn, target_output);
 
     while !state.exit {
-        let events = conn.blocking_read();
-        for event in events {
-            state.handle_event(&conn, event);
-        }
+        conn.dispatch_events(&mut state);
     }
 
     Ok(())
 }
 
-type Callback = fn(&mut State, &Connection, Event<'_>);
+#[derive(Debug)]
+struct Output {
+    wl_output: WlOutput,
+    port:      String,
+    name:      u32,
+    width:     i32,
+    height:    i32,
+    ready:     bool,
+}
+
+type Callback = fn(&mut WaylandState, &Connection, Event<'_>);
 #[derive(Debug, Default)]
-struct State {
+struct WaylandState {
     callbacks: Vec<(u32, Callback)>,
 
     wl_display:      WlDisplay,
     wl_registry:     Option<WlRegistry>,
     wl_compositor:   Option<WlCompositor>,
     viewporter:      Option<WpViewporter>,
+    outputs:         Vec<Output>,
     wlr_layer_shell: Option<WlrLayerShell>,
 
     wl_surface:    Option<WlSurface>,
@@ -74,34 +85,62 @@ struct State {
     exit: bool,
 }
 
-impl State {
-    fn init_layer(&mut self, conn: &Connection) {
-        let Some(wlr_layer_shell) = self.wlr_layer_shell.as_ref() else {
-            panic!("bruh");
-        };
+impl State for WaylandState {
+    fn handle_event(&mut self, conn: &Connection, event: Event<'_>) {
+        if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
+            cb(self, conn, event)
+        } else {
+            eprintln!(
+                "[\x1b[33mWARNING\x1b[0m]: Unhandled event for id: {}, opcode: {}",
+                event.header.id, event.header.opcode
+            )
+        }
+    }
+}
 
+impl WaylandState {
+    fn init_layer(&mut self, conn: &Connection, target: Option<String>) {
         let Some(wl_compositor) = self.wl_compositor.as_ref() else {
-            panic!("bruh");
-        };
-
-        let Some(wl_buffer) = self.wl_buffer.as_ref() else {
-            panic!("bruh");
+            panic!("How did this happen");
         };
 
         let wl_surface = wl_compositor.create_surface(conn);
-        self.callbacks
-            .push((wl_surface.id, Self::on_wlsurface_event));
+        self.register_cb(Self::on_wlsurface_event, wl_surface.id);
+
+        let Some(wl_buffer) = self.wl_buffer.as_ref() else {
+            panic!("How did this happen");
+        };
+
+        let Some(wlr_layer_shell) = self.wlr_layer_shell.as_ref() else {
+            panic!("How did this happen");
+        };
+
+        let Some(output) = self
+            .outputs
+            .iter()
+            .filter(|o| {
+                if !o.ready {
+                    false
+                } else if let Some(name) = target.as_ref() {
+                    *name == o.port
+                } else {
+                    true
+                }
+            })
+            .next()
+        else {
+            eprintln!("Couldn't find an output");
+            std::process::exit(1);
+        };
 
         let layer_surface = wlr_layer_shell.get_layer_surface(
             conn,
             &wl_surface,
-            None,
-            WlrLayer::Background,
+            Some(&output.wl_output),
+            WlrLayer::Top,
             "crosshair",
         );
-
-        self.callbacks
-            .push((layer_surface.id, Self::on_layersurface_event));
+        self.register_cb(Self::on_layersurface_event, layer_surface.id);
 
         if let Some(ref viewporter) = self.viewporter {
             let viewport = viewporter.get_viewport(conn, &wl_surface);
@@ -111,29 +150,19 @@ impl State {
 
         let anchor = WlrLayerSurface::ANCHOR_TOP
             | WlrLayerSurface::ANCHOR_LEFT
-            | WlrLayerSurface::ANCHOR_RIGHT;
+            | WlrLayerSurface::ANCHOR_RIGHT
+            | WlrLayerSurface::ANCHOR_BOTTOM;
 
         layer_surface.set_keyboard_interactivity(conn, WlrLayerKeyboard::None);
-        layer_surface.set_exclusive_zone(conn, 30);
+        layer_surface.set_exclusive_zone(conn, 0);
         layer_surface.set_anchor(conn, anchor);
         layer_surface.set_margin(conn, 0, 0, 0, 0);
-        layer_surface.set_size(conn, 0, 30);
+        layer_surface.set_size(conn, 30, 30);
 
         wl_surface.commit(conn);
 
         self.layer_surface = Some(layer_surface);
         self.wl_surface = Some(wl_surface);
-    }
-
-    pub fn handle_event(&mut self, conn: &Connection, event: Event<'_>) {
-        if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
-            cb(self, conn, event)
-        } else {
-            eprintln!(
-                "[\x1b[33mWARNING\x1b[0m]: Unhandled event for id: {}, opcode: {}",
-                event.header.id, event.header.opcode
-            )
-        }
     }
 
     fn on_wldisplay_event(&mut self, _conn: &Connection, event: Event) {
@@ -163,18 +192,15 @@ impl State {
                 version,
             } => match interface {
                 "wl_compositor" => {
-                    let wl_compositor: WlCompositor =
-                        wl_registry.bind(&conn, name, interface, version);
+                    let wl_compositor = wl_registry.bind(&conn, name, interface, version);
                     self.wl_compositor = Some(wl_compositor);
                 }
                 "wp_viewporter" => {
-                    let viewporter: WpViewporter =
-                        wl_registry.bind(&conn, name, interface, version);
+                    let viewporter = wl_registry.bind(&conn, name, interface, version);
                     self.viewporter = Some(viewporter);
                 }
                 "zwlr_layer_shell_v1" => {
-                    let wlr_layer_shell: WlrLayerShell =
-                        wl_registry.bind(&conn, name, interface, version);
+                    let wlr_layer_shell = wl_registry.bind(&conn, name, interface, version);
                     self.wlr_layer_shell = Some(wlr_layer_shell);
                 }
                 "wp_single_pixel_buffer_manager_v1" => {
@@ -187,9 +213,21 @@ impl State {
                         (u32::MAX / 255) * 220,
                         (u32::MAX / 255) * ((50 * 255) / 100),
                     );
-                    self.callbacks.push((wl_buffer.id, Self::on_wlbuffer_event));
+                    self.register_cb(Self::on_wlbuffer_event, wl_buffer.id);
                     self.wl_buffer = Some(wl_buffer);
                     spm.destroy(conn);
+                }
+                "wl_output" => {
+                    let wl_output: WlOutput = wl_registry.bind(&conn, name, interface, version);
+                    self.register_cb(Self::on_output_event, wl_output.id);
+                    self.outputs.push(Output {
+                        wl_output,
+                        port: String::new(),
+                        name,
+                        width: 0,
+                        height: 0,
+                        ready: false,
+                    });
                 }
                 _ => {}
             },
@@ -261,5 +299,39 @@ impl State {
         match wl_buffer.parse_event(event) {
             WlBufferEvent::Release => {}
         }
+    }
+
+    fn on_output_event(&mut self, conn: &Connection, event: Event<'_>) {
+        let Some(output) = self
+            .outputs
+            .iter_mut()
+            .find(|o| o.wl_output.id == event.header.id)
+        else {
+            return;
+        };
+        match output.wl_output.parse_event(event) {
+            WlOutputEvent::Name {
+                name,
+            } => {
+                output.port = name.into();
+            }
+            WlOutputEvent::Mode {
+                width,
+                height,
+                ..
+            } => {
+                output.width = width;
+                output.height = height;
+            }
+            WlOutputEvent::Done => output.ready = true,
+            WlOutputEvent::Geometry {
+                ..
+            } => {}
+            _ => {}
+        }
+    }
+
+    fn register_cb(&mut self, cb: Callback, id: u32) {
+        self.callbacks.push((id, cb));
     }
 }

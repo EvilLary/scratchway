@@ -1,7 +1,7 @@
 use crate::connection::Connection;
-use crate::protocols::impl_obj_prox;
-use crate::protocols::core::*;
 use crate::events::*;
+use crate::protocols::core::*;
+use crate::protocols::impl_obj_prox;
 
 pub use crate::protocols::Object;
 impl_obj_prox!(WpViewporter, "wp_viewporter");
@@ -12,29 +12,29 @@ impl WpViewporter {
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
     }
 
     /// Extend surface interface for crop and scale
     ///
     /// Instantiate an interface extension for the given wl_surface to crop and scale its content.
     /// If the given wl_surface already has a wp_viewport object associated, the viewport_exists protocol error is raised.
-    pub fn get_viewport(
-        &self, conn: &Connection, wl_surface: &WlSurface,
-    ) -> WpViewport {
+    pub fn get_viewport(&self, conn: &Connection, wl_surface: &WlSurface) -> WpViewport {
         let id = conn.new_id();
         let mut msg = Message::<16>::new(self.id, Self::GET_VIEW_OP);
         msg.write_u32(id).write_u32(wl_surface.id()).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_viewport(new_id: {}, wl_surface: {})",
-            self.interface, self.id, id, wl_surface.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_viewport(new_id: {}, wl_surface: {})",
+                self.interface, self.id, id, wl_surface.id
+            );
+        }
         Object::from_id(id)
     }
 }
@@ -52,11 +52,12 @@ impl WpViewport {
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
     }
     /// Set the source rectangle for cropping
     ///
@@ -72,11 +73,12 @@ impl WpViewport {
             .write_fixed(h)
             .build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_source(x: {}, y: {}, w: {}, h: {})",
-            self.interface, self.id, x, y, w, h
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_source(x: {}, y: {}, w: {}, h: {})",
+                self.interface, self.id, x, y, w, h
+            );
+        }
     }
     /// Set the surface size for scaling
     ///
@@ -88,10 +90,11 @@ impl WpViewport {
         let mut msg = Message::<16>::new(self.id, Self::SET_DESTINATION_OP);
         msg.write_i32(w).write_i32(h).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_destination(w: {}, h: {})",
-            self.interface, self.id, w, h
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_destination(w: {}, h: {})",
+                self.interface, self.id, w, h
+            );
+        }
     }
 }

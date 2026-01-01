@@ -1,7 +1,7 @@
 use crate::connection::Connection;
-use crate::protocols::impl_obj_prox;
-use crate::protocols::core::*;
 use crate::events::*;
+use crate::protocols::core::*;
+use crate::protocols::impl_obj_prox;
 
 pub use crate::protocols::Object;
 
@@ -13,17 +13,16 @@ impl WpSinglePixelBufferMgr {
 
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
         conn.write_request(msg);
     }
 
-    pub fn create_buffer(
-        &self, conn: &Connection, r: u32, g: u32, b: u32, a: u32,
-    ) -> WlBuffer {
+    pub fn create_buffer(&self, conn: &Connection, r: u32, g: u32, b: u32, a: u32) -> WlBuffer {
         let id = conn.new_id();
         let mut msg = Message::<28>::new(self.id, Self::CREATE_BUFFER_OP);
         msg.write_u32(id)
@@ -32,11 +31,12 @@ impl WpSinglePixelBufferMgr {
             .write_u32(b)
             .write_u32(a)
             .build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_buffer(new_id: {}, r: {}, g: {}, b: {}, a: {})",
-            self.interface, self.id, id, r, g, b, a
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_buffer(new_id: {}, r: {}, g: {}, b: {}, a: {})",
+                self.interface, self.id, id, r, g, b, a
+            );
+        }
         conn.write_request(msg);
         Object::from_id(id)
     }

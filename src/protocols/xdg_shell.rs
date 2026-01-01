@@ -22,22 +22,24 @@ impl XdgWmBase {
 
     pub fn destroy(&self, conn: &Connection) {
         let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
         conn.write_request(msg);
     }
 
     pub fn get_xdg_surface(&self, conn: &Connection, wl_surface: &WlSurface) -> XdgSurface {
         let id = conn.new_id();
         let mut msg = Message::<16>::new(self.id, Self::GET_XDGSURFACE_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_xdg_surface(new_id: {}, wl_surface: {})",
-            self.interface, self.id, id, wl_surface.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_xdg_surface(new_id: {}, wl_surface: {})",
+                self.interface, self.id, id, wl_surface.id
+            );
+        }
         msg.write_u32(id).write_u32(wl_surface.id).build();
         conn.write_request(msg);
         Object::from_id(id)
@@ -53,11 +55,12 @@ impl XdgWmBase {
 
     pub fn pong(&self, conn: &Connection, serial: u32) {
         let mut msg = Message::<12>::new(self.id, Self::PONG_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.pong(serial: {})",
-            self.interface, self.id, serial
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.pong(serial: {})",
+                self.interface, self.id, serial
+            );
+        }
         msg.write_u32(serial).build();
         conn.write_request(msg);
     }
@@ -65,12 +68,15 @@ impl XdgWmBase {
     pub fn parse_event(&self, event: Event<'_>) -> XdgWmBaseEvent {
         if event.header.opcode == Self::PING_OP {
             let serial = event.parser().get_u32();
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.ping(serial: {})",
-                self.interface, self.id, serial
-            );
-            return XdgWmBaseEvent::Ping { serial };
+            if *crate::connection::DEBUG {
+                eprintln!(
+                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.ping(serial: {})",
+                    self.interface, self.id, serial
+                );
+            }
+            return XdgWmBaseEvent::Ping {
+                serial,
+            };
         }
         unreachable!()
     }
@@ -95,23 +101,29 @@ impl XdgSurface {
         let parser = event.parser();
         if event.header.opcode == Self::CONFIGURE_OP {
             let serial = parser.get_u32();
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.configure(serial: {})",
-                self.interface, self.id, serial
-            );
-            return { XdgSurfaceEvent::Configure { serial } };
+            if *crate::connection::DEBUG {
+                eprintln!(
+                    "[\x1b[32mDEBUG\x1b[0m]: {}#{}.configure(serial: {})",
+                    self.interface, self.id, serial
+                );
+            }
+            return {
+                XdgSurfaceEvent::Configure {
+                    serial,
+                }
+            };
         }
         unreachable!()
     }
 
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
         conn.write_request(msg);
     }
 
@@ -122,22 +134,24 @@ impl XdgSurface {
             .write_i32(w)
             .write_i32(h)
             .build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_window_geometry(x: {}, y: {}, w: {}, h: {})",
-            self.interface, self.id, x, y, w, h
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_window_geometry(x: {}, y: {}, w: {}, h: {})",
+                self.interface, self.id, x, y, w, h
+            );
+        }
         conn.write_request(msg);
     }
 
     pub fn ack_configure(&self, conn: &Connection, serial: u32) {
         let mut msg = Message::<12>::new(self.id, Self::ACK_CONFIGURE_OP);
         msg.write_u32(serial).build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.ack_configure(serial: {})",
-            self.interface, self.id, serial
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.ack_configure(serial: {})",
+                self.interface, self.id, serial
+            );
+        }
         conn.write_request(msg);
     }
 
@@ -145,11 +159,12 @@ impl XdgSurface {
         let id = conn.new_id();
         let mut msg = Message::<12>::new(self.id, Self::GET_TOPLEVEL_OP);
         msg.write_u32(id).build();
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_toplevel(new_id: {})",
-            self.interface, self.id, id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_toplevel(new_id: {})",
+                self.interface, self.id, id
+            );
+        }
         conn.write_request(msg);
         Object::from_id(id)
     }
@@ -160,12 +175,12 @@ impl_obj_prox!(XdgToplevel, "xdg_toplevel");
 #[derive(Debug)]
 pub enum XdgToplevelEvent<'a> {
     Configure {
-        width: i32,
+        width:  i32,
         height: i32,
         states: &'a [u32],
     },
     ConfigureBounds {
-        width: i32,
+        width:  i32,
         height: i32,
     },
     Close,
@@ -192,11 +207,12 @@ impl XdgToplevel {
                 let width = parser.get_i32();
                 let height = parser.get_i32();
                 let states = parser.get_array_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.configure(width: {}, height: {}, states: {:?})",
-                    self.interface, self.id, width, height, states
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.configure(width: {}, height: {}, states: {:?})",
+                        self.interface, self.id, width, height, states
+                    );
+                }
                 XdgToplevelEvent::Configure {
                     width,
                     height,
@@ -206,29 +222,37 @@ impl XdgToplevel {
             Self::CONFIGURE_BOUNDS_OP => {
                 let width = parser.get_i32();
                 let height = parser.get_i32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.configure_bounds(width: {}, height: {})",
-                    self.interface, self.id, width, height
-                );
-                XdgToplevelEvent::ConfigureBounds { width, height }
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.configure_bounds(width: {}, height: {})",
+                        self.interface, self.id, width, height
+                    );
+                }
+                XdgToplevelEvent::ConfigureBounds {
+                    width,
+                    height,
+                }
             }
             Self::CLOSE_OP => {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.close()",
-                    self.interface, self.id
-                );
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.close()",
+                        self.interface, self.id
+                    );
+                }
                 XdgToplevelEvent::Close
             }
             Self::WM_CAPABILITIES_OP => {
                 let capabilities = parser.get_array_u32();
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.wm_capabilities(capabilities: {:?})",
-                    self.interface, self.id, capabilities
-                );
-                XdgToplevelEvent::WmCapabilities { capabilities }
+                if *crate::connection::DEBUG {
+                    eprintln!(
+                        "[\x1b[32mDEBUG\x1b[0m]: ==> {}#{}.wm_capabilities(capabilities: {:?})",
+                        self.interface, self.id, capabilities
+                    );
+                }
+                XdgToplevelEvent::WmCapabilities {
+                    capabilities,
+                }
             }
             _ => unreachable!(),
         }
@@ -237,11 +261,12 @@ impl XdgToplevel {
 
     pub fn destroy(&self, conn: &Connection) {
         let mut msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-            self.interface, self.id
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
+                self.interface, self.id
+            );
+        }
         conn.write_request(msg);
     }
 
@@ -249,25 +274,27 @@ impl XdgToplevel {
         let mut msg = Message::<64>::new(self.id, Self::SET_TITLE_OP);
         msg.write_str(title.as_ref()).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(title: {})",
-            self.interface,
-            self.id,
-            title.as_ref()
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(title: {})",
+                self.interface,
+                self.id,
+                title.as_ref()
+            );
+        }
     }
 
     pub fn set_app_id(&self, conn: &Connection, app_id: impl AsRef<str>) {
         let mut msg = Message::<64>::new(self.id, Self::SET_APP_ID_OP);
         msg.write_str(app_id.as_ref()).build();
         conn.write_request(msg);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(app_id: {})",
-            self.interface,
-            self.id,
-            app_id.as_ref()
-        );
+        if *crate::connection::DEBUG {
+            eprintln!(
+                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_title(app_id: {})",
+                self.interface,
+                self.id,
+                app_id.as_ref()
+            );
+        }
     }
 }
