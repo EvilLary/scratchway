@@ -1,5 +1,7 @@
 use std::cell::Cell;
 
+use crate::log;
+
 #[derive(Debug, Clone, Copy)]
 pub struct EventIter<'a> {
     buf: &'a [u8],
@@ -14,7 +16,7 @@ impl<'a> EventIter<'a> {
 }
 
 impl<'a> Iterator for EventIter<'a> {
-    type Item = Event<'a>;
+    type Item = WlEvent<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.buf.len() < Header::HEADER_SIZE {
@@ -34,9 +36,9 @@ impl<'a> Iterator for EventIter<'a> {
         }
 
         let Some(data) = self.buf.get(Header::HEADER_SIZE..header.size as usize) else {
-            eprintln!(
-                "[\x1b[32mERROR\x1b[0m]: Malformed event with header: {:?}, discarding the entire buffer",
-                header
+            log!(ERR,
+                "Malformed event with header: {:?}, discarding the entire buffer {:?}",
+                header, self.buf
             );
             return None; // Thanks kwin
         };
@@ -47,7 +49,7 @@ impl<'a> Iterator for EventIter<'a> {
             self.buf = &self.buf[header.size as usize..];
         }
 
-        Some(Event {
+        Some(WlEvent {
             header,
             data,
         })
@@ -55,12 +57,12 @@ impl<'a> Iterator for EventIter<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Event<'a> {
+pub struct WlEvent<'a> {
     pub header: Header,
     pub data:   &'a [u8],
 }
 
-impl<'a> Event<'a> {
+impl<'a> WlEvent<'a> {
     pub fn parser(&self) -> EventDataParser<'a> {
         EventDataParser::new(self.data)
     }
@@ -109,7 +111,7 @@ impl<'a> EventDataParser<'a> {
         }
     }
 
-    pub fn get_u16(&mut self) -> u16 {
+    pub fn get_u16(&self) -> u16 {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let num = u16::from_ne_bytes([data[0], data[1]]);
@@ -117,7 +119,7 @@ impl<'a> EventDataParser<'a> {
         num
     }
 
-    pub fn get_fixed(&mut self) -> f32 {
+    pub fn get_fixed(&self) -> f32 {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f32;
@@ -166,7 +168,7 @@ impl<'a> EventDataParser<'a> {
         array
     }
 
-    pub(crate) fn get_i32(&self) -> i32 {
+    pub fn get_i32(&self) -> i32 {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]);

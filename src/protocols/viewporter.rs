@@ -1,100 +1,126 @@
-use crate::connection::Connection;
-use crate::events::*;
-use crate::protocols::core::*;
-use crate::protocols::impl_obj_prox;
+pub mod wp_viewporter {
+    use crate::connection::Connection;
+    use crate::events::*;
+    use crate::connection::Object;
+    use crate::protocols::wayland::*;
+    use super::*;
 
-pub use crate::protocols::Object;
-impl_obj_prox!(WpViewporter, "wp_viewporter");
-impl WpViewporter {
-    pub(crate) const DESTROY_OP: u16 = 0;
-    pub(crate) const GET_VIEW_OP: u16 = 1;
-
-    pub fn destroy(&self, conn: &Connection) {
-        let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg);
-        if *crate::connection::DEBUG {
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-                self.interface, self.id
-            );
+    #[derive(Debug)]
+    pub struct WpViewporter {
+        pub(crate) id: u32,
+        pub(crate) interface: &'static str,
+    }
+    impl WpViewporter {
+        const INTERFACE: &'static str = "wp_viewporter";
+        pub fn destroy(&self, conn: &Connection, ) {
+          let mut msg = Message::<8>::new(self.id, 0);
+          msg.build();
+          conn.write_request(msg);
+          if *crate::connection::DEBUG {
+              crate::log!(WAYLAND, "wp_viewporter.destroy()", );
+          }
+        }
+        pub fn get_viewport(&self, conn: &Connection, surface: &wl_surface::WlSurface, ) -> wp_viewport::WpViewport {
+          let mut msg = Message::<16>::new(self.id, 1);
+          let new_id = conn.new_id();
+          msg.write_u32(new_id);
+          let surface_id = surface.id();
+          msg.write_u32(surface_id);
+          msg.build();
+          conn.write_request(msg);
+          if *crate::connection::DEBUG {
+              crate::log!(WAYLAND, "wp_viewporter.get_viewport({}, {}, )", new_id,surface_id,);
+          }
+          Object::from_id(new_id)
         }
     }
-
-    /// Extend surface interface for crop and scale
-    ///
-    /// Instantiate an interface extension for the given wl_surface to crop and scale its content.
-    /// If the given wl_surface already has a wp_viewport object associated, the viewport_exists protocol error is raised.
-    pub fn get_viewport(&self, conn: &Connection, wl_surface: &WlSurface) -> WpViewport {
-        let id = conn.new_id();
-        let mut msg = Message::<16>::new(self.id, Self::GET_VIEW_OP);
-        msg.write_u32(id).write_u32(wl_surface.id()).build();
-        conn.write_request(msg);
-        if *crate::connection::DEBUG {
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.get_viewport(new_id: {}, wl_surface: {})",
-                self.interface, self.id, id, wl_surface.id
-            );
-        }
-        Object::from_id(id)
+    #[derive(Debug)]
+    pub enum Event {
     }
-}
-
-impl_obj_prox!(WpViewport, "wp_viewport");
-impl WpViewport {
-    pub(crate) const DESTROY_OP: u16 = 0;
-    pub(crate) const SET_SOURCE_OP: u16 = 1;
-    pub(crate) const SET_DESTINATION_OP: u16 = 2;
-
-    /// Remove scaling and cropping from the surface
-    ///
-    /// The associated wl_surface's crop and scale state is removed.
-    ///  The change is applied on the next wl_surface.commit.
-    pub fn destroy(&self, conn: &Connection) {
-        let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        conn.write_request(msg);
-        if *crate::connection::DEBUG {
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-                self.interface, self.id
-            );
+    impl Object for WpViewporter {
+        type Event<'a> = Event;
+        fn from_id(id: u32) -> WpViewporter {
+            Self { id, interface: Self::INTERFACE }
         }
-    }
-    /// Set the source rectangle for cropping
-    ///
-    /// Set the source rectangle of the associated wl_surface. See wp_viewport for the description, and relation to the wl_buffer size.
-    /// If all of x, y, width and height are -1.0, the source rectangle is unset instead.
-    /// Any other set of values where width or height are zero or negative, or x or y are negative, raise the bad_value protocol error.
-    /// The crop and scale state is double-buffered, see wl_surface.commit.
-    pub fn set_source(&self, conn: &Connection, x: f32, y: f32, w: f32, h: f32) {
-        let mut msg = Message::<24>::new(self.id, Self::SET_SOURCE_OP);
-        msg.write_fixed(x)
-            .write_fixed(y)
-            .write_fixed(w)
-            .write_fixed(h)
-            .build();
-        conn.write_request(msg);
-        if *crate::connection::DEBUG {
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_source(x: {}, y: {}, w: {}, h: {})",
-                self.interface, self.id, x, y, w, h
-            );
+        fn id(&self) -> u32 {
+            self.id
         }
-    }
-    /// Set the surface size for scaling
-    ///
-    /// Set the destination size of the associated wl_surface. See wp_viewport for the description, and relation to the wl_buffer size.
-    /// If width is -1 and height is -1, the destination size is unset instead.
-    /// Any other pair of values for width and height that contains zero or negative values raises the bad_value protocol error.
-    /// The crop and scale state is double-buffered, see wl_surface.commit.
-    pub fn set_destination(&self, conn: &Connection, w: i32, h: i32) {
-        let mut msg = Message::<16>::new(self.id, Self::SET_DESTINATION_OP);
-        msg.write_i32(w).write_i32(h).build();
-        conn.write_request(msg);
-        if *crate::connection::DEBUG {
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.set_destination(w: {}, h: {})",
-                self.interface, self.id, w, h
-            );
+        fn interface(&self) -> &'static str {
+            self.interface
+        }
+        fn parse_event<'a>(&self, event: WlEvent<'a>, conn: &Connection) -> Self::Event<'a> {
+            let parser = event.parser();
+            match event.header.opcode {
+                _ => unreachable!()
+            }
         }
     }
 }
+pub mod wp_viewport {
+    use crate::connection::Connection;
+    use crate::events::*;
+    use crate::connection::Object;
+    use crate::protocols::wayland::*;
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct WpViewport {
+        pub(crate) id: u32,
+        pub(crate) interface: &'static str,
+    }
+    impl WpViewport {
+        const INTERFACE: &'static str = "wp_viewport";
+        pub fn destroy(&self, conn: &Connection, ) {
+          let mut msg = Message::<8>::new(self.id, 0);
+          msg.build();
+          conn.write_request(msg);
+          if *crate::connection::DEBUG {
+              crate::log!(WAYLAND, "wp_viewport.destroy()", );
+          }
+        }
+        pub fn set_source(&self, conn: &Connection, x: f32, y: f32, width: f32, height: f32, ) {
+          let mut msg = Message::<24>::new(self.id, 1);
+          msg.write_fixed(x);
+          msg.write_fixed(y);
+          msg.write_fixed(width);
+          msg.write_fixed(height);
+          msg.build();
+          conn.write_request(msg);
+          if *crate::connection::DEBUG {
+              crate::log!(WAYLAND, "wp_viewport.set_source({:.2}, {:.2}, {:.2}, {:.2}, )", x,y,width,height,);
+          }
+        }
+        pub fn set_destination(&self, conn: &Connection, width: i32, height: i32, ) {
+          let mut msg = Message::<16>::new(self.id, 2);
+          msg.write_i32(width);
+          msg.write_i32(height);
+          msg.build();
+          conn.write_request(msg);
+          if *crate::connection::DEBUG {
+              crate::log!(WAYLAND, "wp_viewport.set_destination({}, {}, )", width,height,);
+          }
+        }
+    }
+    #[derive(Debug)]
+    pub enum Event {
+    }
+    impl Object for WpViewport {
+        type Event<'a> = Event;
+        fn from_id(id: u32) -> WpViewport {
+            Self { id, interface: Self::INTERFACE }
+        }
+        fn id(&self) -> u32 {
+            self.id
+        }
+        fn interface(&self) -> &'static str {
+            self.interface
+        }
+        fn parse_event<'a>(&self, event: WlEvent<'a>, conn: &Connection) -> Self::Event<'a> {
+            let parser = event.parser();
+            match event.header.opcode {
+                _ => unreachable!()
+            }
+        }
+    }
+}
+

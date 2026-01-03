@@ -4,8 +4,9 @@ pub mod wp_single_pixel_buffer_manager_v1;
 pub mod xdg_shell;
 pub mod viewporter;
 pub mod wlr_layer_shell_unstable_v1;
-pub mod core;
-pub mod xdg_decoration_unstable_v1;
+// pub mod core;
+
+pub mod wayland;
 
 pub trait Object {
     fn from_id(id: u32) -> Self;

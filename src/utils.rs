@@ -2,7 +2,6 @@
 
 use std::mem::MaybeUninit;
 
-
 // Pretty much a copy-cat of rust's Vec
 #[derive(Debug)]
 pub struct Bucket<T, const S: usize> {
@@ -175,6 +174,42 @@ impl_index!(std::ops::RangeInclusive<usize>, [T]);
 impl_index!(std::ops::RangeFull, [T]);
 impl_index!(std::ops::RangeToInclusive<usize>, [T]);
 
+macro_rules! syscall {
+    ($fn:expr) => {{
+        let ret = $fn;
+        if (ret == -1) {
+            Err(::std::io::Error::last_os_error())
+        } else {
+            Ok(ret)
+        }
+    }};
+    () => {};
+}
+pub(crate) use syscall;
+
+#[macro_export]
+macro_rules! log {
+    (INFO, $($arg:tt)*) => {{
+        eprintln!("[\x1b[32mINFO\x1b[0m]: {}", format_args!($($arg)*));
+    }};
+    (ERR, $($arg:tt)*) => {{
+        eprintln!("[\x1b[31mERROR\x1b[0m]: {}", format_args!($($arg)*));
+    }};
+    (DEBUG, $($arg:tt)*) => {{
+        eprintln!("[\x1b[34mDEBUG\x1b[0m]: {}", format_args!($($arg)*));
+    }};
+    (TRACE, $($arg:tt)*) => {{
+        eprintln!("[\x1b[36mTRACE\x1b[0m]: {}", format_args!($($arg)*));
+    }};
+    (WARNING, $($arg:tt)*) => {{
+        eprintln!("[\x1b[33mWARNING\x1b[0m]: {}", format_args!($($arg)*));
+    }};
+    (WAYLAND, $($arg:tt)*) => {{
+        eprintln!("[\x1b[35mWAYLAND-DEBUG\x1b[0m]: {}", format_args!($($arg)*));
+    }};
+    () => {};
+}
+
 #[cfg(test)]
 mod bucket_tests {
     use crate::utils::Bucket;
@@ -200,16 +235,14 @@ mod bucket_tests {
 
     #[test]
     fn bucket_len() {
-        const SIZE: usize = 100;
-        let mut bucket = Bucket::<u8, SIZE>::new();
+        let mut bucket = Bucket::<u8, 50>::new();
         bucket.extend_from_slice(&[0; 45]);
         assert_eq!(bucket.len(), 45);
     }
 
     #[test]
     fn bucket_pop() {
-        const SIZE: usize = 45;
-        let mut bucket = Bucket::<u8, SIZE>::new();
+        let mut bucket = Bucket::<u8, 20>::new();
         bucket.extend_from_slice(&[0; 10]);
         while let Some(_) = bucket.pop() {}
         assert_eq!(bucket.len(), 0);
@@ -217,8 +250,7 @@ mod bucket_tests {
 
     #[test]
     fn bucket_clear() {
-        const SIZE: usize = 45;
-        let mut bucket = Bucket::<u8, SIZE>::new();
+        let mut bucket = Bucket::<u8, 40>::new();
         bucket.extend_from_slice(&[0; 10]);
         assert_eq!(bucket.len(), 10);
         bucket.clear();
@@ -227,16 +259,14 @@ mod bucket_tests {
 
     #[test]
     fn bucket_push() {
-        const SIZE: usize = 45;
-        let mut bucket = Bucket::<u8, SIZE>::new();
+        let mut bucket = Bucket::<u8, 10>::new();
         bucket.push(134);
         bucket.push(80);
         bucket.push(3);
-        assert_eq!(bucket.as_slice()[0], 134);
-        assert_eq!(bucket.as_slice()[1], 80);
-        assert_eq!(bucket.as_slice()[2], 3);
-        let i = bucket.pop();
-        assert_eq!(i, Some(3));
+        assert_eq!(bucket[0], 134);
+        assert_eq!(bucket[1], 80);
+        assert_eq!(bucket[2], 3);
+        assert_eq!(bucket.pop(), Some(3));
     }
 
     #[test]
@@ -264,15 +294,19 @@ mod bucket_tests {
                 println!("Dropped droppy: {:?}", self);
             }
         }
-        let mut bucket = Bucket::<Droppy, SIZE>::new();
-        bucket.push(Droppy(10));
-        bucket.push(Droppy(5));
-        bucket.clear(); // Should not double free
-        let mut bucket = Bucket::<String, SIZE>::new();
-        bucket.push("one".into());
-        bucket.push("two".into());
-        assert_eq!(bucket.pop(), Some("two".into()));
-        bucket.clear(); // Should not double free
+        {
+            let mut bucket = Bucket::<Droppy, SIZE>::new();
+            bucket.push(Droppy(10));
+            bucket.push(Droppy(5));
+            bucket.clear(); // Should not double free
+        }
+        {
+            let mut bucket = Bucket::<String, SIZE>::new();
+            bucket.push("one".into());
+            bucket.push("two".into());
+            assert_eq!(bucket.pop(), Some("two".into()));
+            bucket.clear(); // Should not double free
+        }
     }
 
     #[test]
@@ -288,16 +322,3 @@ mod bucket_tests {
         }
     }
 }
-
-macro_rules! syscall {
-    ($fn:expr) => {{
-        let ret = $fn;
-        if (ret == -1) {
-            Err(::std::io::Error::last_os_error())
-        } else {
-            Ok(ret)
-        }
-    }};
-    () => {};
-}
-pub(crate) use syscall;

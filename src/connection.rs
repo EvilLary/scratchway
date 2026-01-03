@@ -1,7 +1,9 @@
 #![allow(unused)]
-#![feature(unix_socket_ancillary_data)]
 
 use crate::events::*;
+use crate::log;
+use crate::protocols::wayland::wl_display;
+use std::sync::RwLock;
 use std::{
     cell::Cell,
     io::{self, IoSlice, Read, Write},
@@ -25,20 +27,10 @@ pub static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| unsafe
     !env.is_null() && libc::strcmp(env, c"1".as_ptr().cast()) == 0
 });
 
-macro_rules! trust_me_bro {
-    ($cooked:expr) => {
-        unsafe { $cooked }
-    };
-}
-
-const MAX_BUFFER_SIZE: usize = 4096;
 #[derive(Debug)]
 pub struct Connection {
-    pub(crate) socket:     UnixStream,
+    pub(crate) socket: UnixStream,
     pub(crate) id_counter: IdCounter,
-
-    pub(crate) in_buffer:  Bucket<u8, MAX_BUFFER_SIZE>,
-    pub(crate) out_buffer: Bucket<u8, MAX_BUFFER_SIZE>,
 
     pub(crate) reader: WaylandBuffer<Reader>,
     pub(crate) writer: WaylandBuffer<Writer>,
@@ -51,18 +43,17 @@ impl Connection {
         let socket = UnixStream::connect(std::path::PathBuf::from(runtime_dir).join(wayland_disp))?;
         let debug = unsafe { !libc::getenv(c"WAYLAND_DEBUG".as_ptr()).is_null() };
         if *TRACE {
-            eprintln!(
-                "[\x1b[36mTRACE\x1b[0m]: connected to wayland socket at {:?}",
+            log!(
+                TRACE,
+                "connected to wayland socket at {:?}",
                 socket.peer_addr().unwrap()
             );
         }
         Ok(Self {
+            reader: WaylandBuffer::<Reader>::new(socket.as_raw_fd()), // Thanks Rust
+            writer: WaylandBuffer::<Writer>::new(socket.as_raw_fd()),
             socket,
             id_counter: IdCounter::new(),
-            in_buffer: Bucket::full(),
-            out_buffer: Bucket::new(),
-            reader: WaylandBuffer::<Reader>::new(), // Thanks Rust
-            writer: WaylandBuffer::<Writer>::new(),
         })
     }
 
@@ -70,112 +61,73 @@ impl Connection {
         self.socket.as_raw_fd()
     }
 
-    pub fn display(&self) -> crate::protocols::core::WlDisplay {
-        crate::protocols::Object::from_id(1)
+    pub fn display(&self) -> wl_display::WlDisplay {
+        Object::from_id(1)
     }
 
-    pub(crate) fn new_id(&self) -> u32 {
+    pub fn new_id(&self) -> u32 {
         self.id_counter.get_new()
     }
 
-    pub(crate) fn write_request<const S: usize>(&self, msg: Message<S>) {
-        // TODO: check buffer len to flush
-        let me = self.get_mut();
-        if !self.writer.data.can_fit(msg.data().len()) {
-            me.writer.flush(self.display_fd());
+    pub fn write_request<const S: usize>(&self, msg: Message<S>) {
+        let mut data = self.writer.data.write().unwrap();
+        if data.can_fit(msg.data().len()) {
+            drop(data);
+            self.writer.send();
         }
-        me.writer.write_msg(msg);
+        self.writer.write_msg(msg);
     }
 
-    fn get_mut(&self) -> &mut Self {
-        // SAFETY: yum yum
-        trust_me_bro! {
-            (self as *const Self as *mut Self)
-                .as_mut()
-                .unwrap_unchecked()
-        }
-    }
-
-    pub fn dispatch_events<S: State>(&mut self, state: &mut S) -> io::Result<()> {
+    // TODO: have interior mutability instead of passing mut ref around
+    pub fn dispatch_events<S: State>(&self, state: &mut S) -> io::Result<()> {
         let read = self.read_events()?;
-        let events = EventIter::new(&self.in_buffer.as_slice()[..read]);
+        let data = self.reader.data.read().unwrap();
+        let events = EventIter::new(&data[..read]);
         for event in events {
             state.handle_event(self, event);
         }
         Ok(())
     }
 
-    fn read_events(&mut self) -> io::Result<usize> {
-        self.writer.flush(self.display_fd());
-        let read = unsafe {
-            libc::recv(
-                self.display_fd(),
-                self.in_buffer.as_mut_ptr().cast(),
-                self.in_buffer.len(),
-                libc::MSG_NOSIGNAL,
-            )
-        };
-        if read <= 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(read as usize)
-        }
-    }
-
-    pub fn blocking_read<'a>(&'a self) -> EventIter<'a> {
-        let conn = self.get_mut();
-        let _ = conn.writer.flush(self.display_fd());
-        // FIXME
-        let read = unsafe {
-            libc::recv(
-                conn.display_fd(),
-                conn.in_buffer.as_mut_ptr().cast(),
-                conn.in_buffer.len(),
-                libc::MSG_NOSIGNAL,
-            )
-        };
-        // FIXME
-        if read <= 0 {
-            panic!("Failed to read from wayland socket");
-        }
-        EventIter::new(&self.in_buffer.as_slice()[..read as usize])
-    }
-
-    // TODO: Remove this
-    pub fn flush(&self) -> std::io::Result<()> {
-        self.get_mut().writer.flush(self.display_fd())
+    fn read_events(&self) -> io::Result<usize> {
+        self.writer.send()?;
+        self.reader.recv()
     }
 
     pub fn add_fd(&self, fd: RawFd) {
-        if *TRACE {
-            eprintln!("[\x1b[36mTRACE\x1b[0m]: Add fd {} to pool", fd,);
-        }
-        self.get_mut()
-            .writer
+        self.writer
             .fds
+            .write()
+            .unwrap()
             .push(unsafe { OwnedFd::from_raw_fd(fd) });
+        if *TRACE {
+            log!(TRACE, "Added fd {} to pool", fd,);
+        }
     }
 
-    pub fn roundtrip(&mut self, state: &mut impl State) -> std::io::Result<()> {
+    pub fn get_fd(&self) -> Option<OwnedFd> {
+        self.reader.fds.write().unwrap().pop()
+    }
+
+    pub fn roundtrip(&self, state: &mut impl State) -> std::io::Result<()> {
         let display = self.display();
         let wl_callback = display.sync(self);
         let read = self.read_events()?;
-        let events = EventIter::new(&self.in_buffer.as_slice()[..read]);
+        let data = self.reader.data.read().unwrap();
+        let events = EventIter::new(&data[..read]);
         for event in events {
             if event.header.id == wl_callback.id {
-                let _ = wl_callback.parse_event(event); // just for debugs
+                let _ = wl_callback.parse_event(event, self); // just for debugs
                 break;
             }
             state.handle_event(self, event);
         }
-        // self.dispatch_events(state)?;
         Ok(())
-        // todo!()
     }
 }
 
 pub trait State {
-    fn handle_event(&mut self, conn: &Connection, event: Event<'_>);
+    fn handle_event(&mut self, conn: &Connection, event: WlEvent<'_>);
 }
 
 #[derive(Debug)]
@@ -201,123 +153,193 @@ pub struct Reader;
 #[derive(Debug)]
 pub struct Writer;
 
+const MAX_BUFFER_SIZE: usize = 4096;
+
+//  TODO: find better way to handle interior mutability
 #[derive(Debug)]
 pub(crate) struct WaylandBuffer<T> {
-    pub(crate) data: Bucket<u8, MAX_BUFFER_SIZE>,
-    pub(crate) fds:  Bucket<OwnedFd, 8>,
-    _ghost:          PhantomData<T>,
+    pub(crate) data: RwLock<Bucket<u8, MAX_BUFFER_SIZE>>,
+    pub(crate) fds: RwLock<Bucket<OwnedFd, 8>>,
+    pub(crate) display_fd: RawFd,
+    _ghost: PhantomData<T>,
 }
 
 impl WaylandBuffer<Reader> {
-    pub fn new() -> WaylandBuffer<Reader> {
+    pub fn new(display_fd: RawFd) -> WaylandBuffer<Reader> {
         Self {
-            data:   Bucket::full(),
-            fds:    Bucket::new(),
+            data: RwLock::new(Bucket::full()),
+            fds: RwLock::new(Bucket::new()),
+            display_fd,
             _ghost: PhantomData,
         }
     }
 
-    pub fn get_fd(&mut self) -> Option<OwnedFd> {
-        self.fds.pop()
+    pub fn get_fd(&self) -> Option<OwnedFd> {
+        self.fds.write().unwrap().pop()
     }
 
-    pub fn event_iter(&self, size: usize) -> EventIter<'_> {
-        EventIter::new(&self.data[..size])
+    pub fn recv(&self) -> std::io::Result<usize> {
+        let mut buf = [0u8; 56];
+        let mut fds = self.fds.write().unwrap();
+        fds.clear();
+        let mut data = self.data.write().unwrap();
+        unsafe {
+            let mut msg_name: libc::sockaddr_un = core::mem::zeroed();
+            let mut msghdr: libc::msghdr = core::mem::zeroed();
+
+            msghdr.msg_name = (&raw mut msg_name).cast();
+            msghdr.msg_namelen = size_of::<libc::sockaddr_un>() as u32;
+
+            let mut iov = libc::iovec {
+                iov_base: data.as_mut_ptr().cast(),
+                iov_len: data.len(),
+            };
+
+            msghdr.msg_iov = (&raw mut iov).cast();
+            msghdr.msg_iovlen = 1;
+
+            msghdr.msg_controllen = buf.len();
+            msghdr.msg_control = buf.as_mut_ptr().cast();
+
+            let len = syscall!(libc::recvmsg(
+                self.display_fd,
+                &raw mut msghdr,
+                libc::MSG_CMSG_CLOEXEC
+            ))?;
+
+            if msghdr.msg_controllen > 0 {
+                // lol this is probably not correct, works tho
+                let mut cmsghdr = *libc::CMSG_FIRSTHDR(&raw const msghdr);
+                if cmsghdr.cmsg_type == libc::SCM_RIGHTS {
+                    let len = cmsghdr.cmsg_len;
+                    let data = &buf[size_of::<libc::cmsghdr>()..len];
+                    let raw_fds = core::slice::from_raw_parts(
+                        data.as_ptr() as *const i32,
+                        data.len() / size_of::<i32>(),
+                    );
+                    for fd in raw_fds {
+                        fds.push(OwnedFd::from_raw_fd(*fd));
+                    }
+                    if *TRACE {
+                        log!(TRACE, "Recived ancillay data: {:?}", cmsghdr);
+                    }
+                }
+            }
+
+            Ok(len as usize)
+        }
     }
 }
 
 impl WaylandBuffer<Writer> {
-    pub fn new() -> WaylandBuffer<Writer> {
+    pub fn new(display_fd: RawFd) -> WaylandBuffer<Writer> {
         Self {
-            data:   Bucket::new(),
-            fds:    Bucket::new(),
+            data: RwLock::new(Bucket::new()),
+            fds: RwLock::new(Bucket::new()),
+            display_fd,
             _ghost: PhantomData::<Writer>,
         }
     }
 
-    pub fn write_msg<const S: usize>(&mut self, msg: Message<S>) {
-        self.data.extend_from_slice(msg.data());
+    pub fn write_msg<const S: usize>(&self, msg: Message<S>) {
+        self.data.write().unwrap().extend_from_slice(msg.data());
+        // self.data.extend_from_slice(msg.data());
     }
 
     pub fn add_fd(&mut self, fd: RawFd) {
-        self.fds.push(unsafe { OwnedFd::from_raw_fd(fd) });
+        self.fds
+            .write()
+            .unwrap()
+            .push(unsafe { OwnedFd::from_raw_fd(fd) });
     }
 
-    pub fn flush(&mut self, display_fd: RawFd) -> std::io::Result<()> {
-        if self.data.empty() {
+    pub fn send(&self) -> std::io::Result<()> {
+        let mut data = self.data.write().unwrap();
+        let mut fds = self.fds.write().unwrap();
+        if data.empty() {
             return Ok(());
         }
-        if self.fds.empty() {
-            let ret = unsafe {
+
+        let flags = libc::MSG_NOSIGNAL;
+        let len = if fds.empty() {
+            let len = unsafe {
                 syscall!(libc::send(
-                    display_fd,
-                    self.data.as_ptr().cast(),
-                    self.data.len(),
-                    libc::MSG_NOSIGNAL,
+                    self.display_fd,
+                    data.as_ptr().cast(),
+                    data.len(),
+                    flags,
                 ))?
             };
-            if *TRACE {
-                eprintln!(
-                    "[\x1b[36mTRACE\x1b[0m]: Written {} bytes to fd {} out of {}",
-                    ret,
-                    display_fd,
-                    self.data.len(),
-                );
-            }
-            debug_assert_eq!(self.data.len(), ret as usize); // ??
-            unsafe {
-                self.data.set_len(self.data.len() - (ret as usize));
-            }
+            len as usize
         } else {
             unsafe {
+                // we've only got 10 fds with 4B each it's 40B, CMSG_SPACE(40) = 56
                 let mut buf = [0u8; 56];
-                let fds_bytes = self.fds.as_bytes();
+                let fds_bytes = fds.as_bytes();
                 let fds_len = fds_bytes.len();
-                let required_len = libc::CMSG_SPACE(fds_len as u32);
-                let buf = &mut buf[..required_len as usize];
+                let required_len = libc::CMSG_SPACE(fds_len as u32) as usize;
+                let buf = &mut buf[..required_len];
 
                 let mut io = libc::iovec {
-                    iov_base: self.data.as_mut_ptr().cast(),
-                    iov_len:  self.data.len(),
+                    iov_base: data.as_mut_ptr().cast(),
+                    iov_len: data.len(),
                 };
-                let mut msghdr = libc::msghdr {
-                    msg_iov:        &mut io as *mut _,
-                    msg_iovlen:     1,
-                    msg_control:    buf.as_mut_ptr().cast(),
-                    msg_controllen: buf.len(),
-                    msg_name:       core::ptr::null_mut(),
-                    msg_namelen:    0,
-                    msg_flags:      0,
-                };
-                let mut cmsghdr = libc::CMSG_FIRSTHDR(&msghdr as *const _);
 
+                let mut msghdr = libc::msghdr {
+                    msg_iov: &raw mut io,
+                    msg_iovlen: 1,
+                    msg_control: buf.as_mut_ptr().cast(),
+                    msg_controllen: required_len,
+                    msg_name: core::ptr::null_mut(),
+                    msg_namelen: 0,
+                    msg_flags: 0,
+                };
+
+                let mut cmsghdr = libc::CMSG_FIRSTHDR(&raw const msghdr);
                 // ?? I'm not sure if this exactly correct
                 (*cmsghdr).cmsg_len = libc::CMSG_LEN(fds_len as u32) as usize;
                 (*cmsghdr).cmsg_level = libc::SOL_SOCKET;
                 (*cmsghdr).cmsg_type = libc::SCM_RIGHTS;
 
                 let data = libc::CMSG_DATA(cmsghdr);
-
-                if *TRACE {
-                    eprintln!(
-                        "[\x1b[36mTRACE\x1b[0m]: Sending {:?} fd(s), msghdr: {:?}",
-                        self.fds.len(),
-                        msghdr
-                    );
-                }
-
-                // we've only got 10 fds with 4B each it's 40B, CMSG_SPACE(40) = 56
                 libc::memcpy(data.cast(), fds_bytes.as_ptr().cast(), fds_len);
-                msghdr.msg_controllen = libc::CMSG_SPACE(fds_len as u32) as usize;
 
-                let len = syscall!(libc::sendmsg(display_fd, &msghdr as *const libc::msghdr, 0))?;
-                debug_assert_eq!(self.data.len(), len as usize); // ?
-                unsafe {
-                    self.data.set_len(self.data.len() - (len as usize));
-                }
-                self.fds.clear();
+                let len = syscall!(libc::sendmsg(self.display_fd, &raw const msghdr, flags))?;
+                fds.clear();
+                len as usize
             }
+        };
+
+        let data_len = data.len();
+        if *TRACE {
+            log!(
+                TRACE,
+                "Written {} bytes to fd {} out of {}",
+                len,
+                self.display_fd,
+                data_len,
+            );
+        }
+        debug_assert_eq!(data_len, len as usize); // ??
+        unsafe {
+            data.set_len(data_len - (len as usize));
         }
         Ok(())
+    }
+}
+
+pub trait Object {
+    type Event<'a>;
+    fn from_id(id: u32) -> Self;
+
+    #[inline(always)]
+    fn id(&self) -> u32;
+
+    fn interface(&self) -> &'static str;
+
+    fn parse_event<'a>(
+        &self, event: crate::events::WlEvent<'a>, conn: &Connection,
+    ) -> Self::Event<'a> {
+        todo!()
     }
 }

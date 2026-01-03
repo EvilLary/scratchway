@@ -1,43 +1,61 @@
-use crate::connection::Connection;
-use crate::events::*;
-use crate::protocols::core::*;
-use crate::protocols::impl_obj_prox;
+pub mod wp_single_pixel_buffer_manager_v1 {
+    use crate::connection::Connection;
+    use crate::events::*;
+    use crate::connection::Object;
+    use crate::protocols::wayland::*;
+    use super::*;
 
-pub use crate::protocols::Object;
-
-impl_obj_prox!(WpSinglePixelBufferMgr, "wp_single_pixel_buffer_manager_v1");
-
-impl WpSinglePixelBufferMgr {
-    pub(crate) const DESTROY_OP: u16 = 0;
-    pub(crate) const CREATE_BUFFER_OP: u16 = 1;
-
-    pub fn destroy(&self, conn: &Connection) {
-        let msg = Message::<8>::new(self.id, Self::DESTROY_OP);
-        if *crate::connection::DEBUG {
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.destroy()",
-                self.interface, self.id
-            );
-        }
-        conn.write_request(msg);
+    #[derive(Debug)]
+    pub struct WpSinglePixelBufferManagerV1 {
+        pub(crate) id: u32,
+        pub(crate) interface: &'static str,
     }
-
-    pub fn create_buffer(&self, conn: &Connection, r: u32, g: u32, b: u32, a: u32) -> WlBuffer {
-        let id = conn.new_id();
-        let mut msg = Message::<28>::new(self.id, Self::CREATE_BUFFER_OP);
-        msg.write_u32(id)
-            .write_u32(r)
-            .write_u32(g)
-            .write_u32(b)
-            .write_u32(a)
-            .build();
-        if *crate::connection::DEBUG {
-            eprintln!(
-                "[\x1b[32mDEBUG\x1b[0m]: {}#{}.create_buffer(new_id: {}, r: {}, g: {}, b: {}, a: {})",
-                self.interface, self.id, id, r, g, b, a
-            );
+    impl WpSinglePixelBufferManagerV1 {
+        const INTERFACE: &'static str = "wp_single_pixel_buffer_manager_v1";
+        pub fn destroy(&self, conn: &Connection, ) {
+          let mut msg = Message::<8>::new(self.id, 0);
+          msg.build();
+          conn.write_request(msg);
+          if *crate::connection::DEBUG {
+              crate::log!(WAYLAND, "wp_single_pixel_buffer_manager_v1.destroy()", );
+          }
         }
-        conn.write_request(msg);
-        Object::from_id(id)
+        pub fn create_u32_rgba_buffer(&self, conn: &Connection, r: u32, g: u32, b: u32, a: u32, ) -> wl_buffer::WlBuffer {
+          let mut msg = Message::<28>::new(self.id, 1);
+          let new_id = conn.new_id();
+          msg.write_u32(new_id);
+          msg.write_u32(r);
+          msg.write_u32(g);
+          msg.write_u32(b);
+          msg.write_u32(a);
+          msg.build();
+          conn.write_request(msg);
+          if *crate::connection::DEBUG {
+              crate::log!(WAYLAND, "wp_single_pixel_buffer_manager_v1.create_u32_rgba_buffer({}, {}, {}, {}, {}, )", new_id,r,g,b,a,);
+          }
+          Object::from_id(new_id)
+        }
+    }
+    #[derive(Debug)]
+    pub enum Event {
+    }
+    impl Object for WpSinglePixelBufferManagerV1 {
+        type Event<'a> = Event;
+        fn from_id(id: u32) -> WpSinglePixelBufferManagerV1 {
+            Self { id, interface: Self::INTERFACE }
+        }
+        fn id(&self) -> u32 {
+            self.id
+        }
+        fn interface(&self) -> &'static str {
+            self.interface
+        }
+        fn parse_event<'a>(&self, event: WlEvent<'a>, conn: &Connection) -> Self::Event<'a> {
+            let parser = event.parser();
+            match event.header.opcode {
+                _ => unreachable!()
+            }
+        }
     }
 }
+
