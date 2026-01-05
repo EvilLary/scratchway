@@ -1,0 +1,12 @@
+[lib]
+proc-macro = true
+
+[package]
+name = "scr_scanner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+proc-macro2 = "1.0.104"
+quick-xml = "0.38.4"
+quote = "1.0.42"

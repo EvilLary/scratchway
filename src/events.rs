@@ -9,9 +9,7 @@ pub struct EventIter<'a> {
 
 impl<'a> EventIter<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Self {
-            buf,
-        }
+        Self { buf }
     }
 }
 
@@ -36,9 +34,11 @@ impl<'a> Iterator for EventIter<'a> {
         }
 
         let Some(data) = self.buf.get(Header::HEADER_SIZE..header.size as usize) else {
-            log!(ERR,
+            log!(
+                ERR,
                 "Malformed event with header: {:?}, discarding the entire buffer {:?}",
-                header, self.buf
+                header,
+                self.buf
             );
             return None; // Thanks kwin
         };
@@ -49,17 +49,14 @@ impl<'a> Iterator for EventIter<'a> {
             self.buf = &self.buf[header.size as usize..];
         }
 
-        Some(WlEvent {
-            header,
-            data,
-        })
+        Some(WlEvent { header, data })
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct WlEvent<'a> {
     pub header: Header,
-    pub data:   &'a [u8],
+    pub data: &'a [u8],
 }
 
 impl<'a> WlEvent<'a> {
@@ -71,19 +68,15 @@ impl<'a> WlEvent<'a> {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Header {
-    pub id:     u32,
+    pub id: u32,
     pub opcode: u16,
-    pub size:   u16,
+    pub size: u16,
 }
 
 impl Header {
     pub const HEADER_SIZE: usize = size_of::<Self>();
     pub fn new(id: u32, opcode: u16, size: u16) -> Self {
-        Self {
-            id,
-            opcode,
-            size,
-        }
+        Self { id, opcode, size }
     }
     pub fn from_slice(slice: &[u8]) -> Self {
         debug_assert_eq!(slice.len(), std::mem::size_of::<Self>());
@@ -100,7 +93,7 @@ impl Header {
 // #[derive(Debug, Clone, Copy)]
 pub struct EventDataParser<'a> {
     pub data: &'a [u8],
-    idx:      Cell<usize>,
+    idx: Cell<usize>,
 }
 
 impl<'a> EventDataParser<'a> {
@@ -138,6 +131,9 @@ impl<'a> EventDataParser<'a> {
 
     pub fn get_string<'b>(&'a self) -> &'b str {
         let str_len = self.get_u32() as usize;
+        if str_len == 0 { // Test this
+            return "";
+        }
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let padded_len = roundup(str_len, 4);
@@ -156,7 +152,7 @@ impl<'a> EventDataParser<'a> {
         }
     }
 
-    pub fn get_array_u32<'b>(&'a self) -> &'b [u32] {
+    pub fn get_array<'b>(&'a self) -> &'b [u32] {
         let array_len = self.get_u32() as usize;
         let idx = self.idx.get();
         let data = &self.data[idx..];
@@ -233,8 +229,12 @@ impl<const S: usize> Message<S> {
         self
     }
 
-    pub fn write_str(&mut self, str: impl AsRef<str>) -> &mut Self {
+    pub fn write_string(&mut self, str: impl AsRef<str>) -> &mut Self {
         let str = str.as_ref();
+        if str.is_empty() { // TODO: test this
+            self.write_u32(0);
+            return self;
+        }
         // null included
         self.write_u32((str.len() + 1) as u32);
         self.buf[self.len..str.len() + self.len].copy_from_slice(str.as_bytes());

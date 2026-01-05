@@ -1,23 +1,22 @@
 #![allow(unused)]
 
-use scratchway::events::WlEvent;
-use scratchway::protocols::wayland::*;
-use scratchway::protocols::wlr_layer_shell_unstable_v1::{
-    zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
-    zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
+use scratchway::wayland::*;
+use scratchway::log;
+use scratchway::prelude::*;
+
+use scr_protocols::{
+    single_pixel_buffer_v1::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1,
+    wlr_layer_shell_unstable_v1::{
+        zwlr_layer_shell_v1::ZwlrLayerShellV1, zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, *,
+    },
 };
-use scratchway::protocols::wp_single_pixel_buffer_manager_v1::wp_single_pixel_buffer_manager_v1::{
-    self, WpSinglePixelBufferManagerV1,
-};
-use scratchway::protocols::viewporter::{wp_viewport::WpViewport, wp_viewporter::WpViewporter};
-use scratchway::{Connection, Object, State};
 
 fn main() -> std::io::Result<()> {
-    let mut conn = Connection::connect()?;
+    let conn = Connection::connect()?;
     let target_output = std::env::args().skip(1).next();
 
     let wl_display = conn.display();
-    let wl_registry = wl_display.get_registry(&conn);
+    let wl_registry = wl_display.get_registry(conn.writer());
 
     let mut callbacks: Vec<(u32, Callback)> = vec![
         (wl_registry.id(), WaylandState::on_registry_event),
@@ -31,7 +30,7 @@ fn main() -> std::io::Result<()> {
         ..Default::default()
     };
 
-    conn.roundtrip(&mut state);
+    conn.roundtrip(&mut state)?;
 
     if state.wlr_layer_shell.is_none() {
         eprintln!("Compositor doesn't support zwlr_layer_shell_v1 protocol");
@@ -43,12 +42,12 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
 
-    conn.roundtrip(&mut state);
+    conn.roundtrip(&mut state)?;
 
     state.init_layer(&conn, target_output);
 
     while !state.exit {
-        conn.dispatch_events(&mut state);
+        conn.dispatch_events(&mut state)?;
     }
 
     Ok(())
@@ -72,12 +71,12 @@ struct WaylandState {
     wl_display: wl_display::WlDisplay,
     wl_registry: Option<wl_registry::WlRegistry>,
     wl_compositor: Option<wl_compositor::WlCompositor>,
-    viewporter:      Option<WpViewporter>,
+    // viewporter: Option<WpViewporter>,
     outputs: Vec<Output>,
     wlr_layer_shell: Option<ZwlrLayerShellV1>,
 
     wl_surface: Option<wl_surface::WlSurface>,
-    viewport:      Option<WpViewport>,
+    // viewport: Option<WpViewport>,
     wl_buffer: Option<wl_buffer::WlBuffer>,
     layer_surface: Option<ZwlrLayerSurfaceV1>,
     configured: bool,
@@ -94,9 +93,11 @@ impl State for WaylandState {
         if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
             cb(self, conn, event)
         } else {
-            eprintln!(
-                "[\x1b[33mWARNING\x1b[0m]: Unhandled event for id: {}, opcode: {}",
-                event.header.id, event.header.opcode
+            log!(
+                ERR,
+                " Unhandled event for id: {}, opcode: {}",
+                event.header.id,
+                event.header.opcode
             )
         }
     }
@@ -104,70 +105,64 @@ impl State for WaylandState {
 
 impl WaylandState {
     fn init_layer(&mut self, conn: &Connection, target: Option<String>) {
-        let Some(wl_compositor) = self.wl_compositor.as_ref() else {
-            panic!("How did this happen");
-        };
+        let wl_compositor = unsafe { self.wl_compositor.as_ref().unwrap_unchecked() };
 
-        let wl_surface = wl_compositor.create_surface(conn);
+        let wl_surface = wl_compositor.create_surface(conn.writer());
         self.register_cb(Self::on_wlsurface_event, wl_surface.id());
 
-        let Some(wl_buffer) = self.wl_buffer.as_ref() else {
-            panic!("How did this happen");
+        let wl_buffer = unsafe { self.wl_buffer.as_ref().unwrap_unchecked() };
+        let wlr_layer_shell = unsafe { self.wlr_layer_shell.as_ref().unwrap_unchecked() };
+
+        let Some(output) = self
+            .outputs
+            .iter()
+            .filter(|o| {
+                if !o.ready {
+                    false
+                } else if let Some(name) = target.as_ref() {
+                    *name == o.port
+                } else {
+                    true
+                }
+            })
+            .next()
+        else {
+            eprintln!("Couldn't find an output");
+            std::process::exit(1);
         };
 
-        let Some(wlr_layer_shell) = self.wlr_layer_shell.as_ref() else {
-            panic!("How did this happen");
-        };
-
-        // let Some(output) = self
-        //     .outputs
-        //     .iter()
-        //     .filter(|o| {
-        //         if !o.ready {
-        //             false
-        //         } else if let Some(name) = target.as_ref() {
-        //             *name == o.port
-        //         } else {
-        //             true
-        //         }
-        //     })
-        //     .next()
-        // else {
-        //     eprintln!("Couldn't find an output");
-        //     std::process::exit(1);
-        // };
-
-        let layer_surface = wlr_layer_shell.get_layer_surface(
-            conn,
-            &wl_surface,
-            None,
-            2,
-            "crosshair",
-        );
+        let layer_surface =
+            wlr_layer_shell.get_layer_surface(conn.writer(), &wl_surface, None, 2, "crosshair");
         self.register_cb(Self::on_layersurface_event, layer_surface.id());
 
-        if let Some(ref viewporter) = self.viewporter {
-            let viewport = viewporter.get_viewport(conn, &wl_surface);
-            viewport.set_destination(conn, 500, 100);
-            self.viewport = Some(viewport);
-        }
+        // if let Some(ref viewporter) = self.viewporter {
+        //     let viewport = viewporter.get_viewport(conn, &wl_surface);
+        //     viewport.set_destination(conn, 500, 100);
+        //     self.viewport = Some(viewport);
+        // }
 
-        let anchor = 1 | 2 | 4 | 8;
+        // 1 = top, 2 = bottom,  4 = left , 8 = right
+        let anchor = zwlr_layer_surface_v1::ANCHOR_RIGHT
+            | zwlr_layer_surface_v1::ANCHOR_LEFT
+            | zwlr_layer_surface_v1::ANCHOR_TOP;
 
-        layer_surface.set_keyboard_interactivity(conn, 0);
-        layer_surface.set_exclusive_zone(conn, 0);
-        layer_surface.set_anchor(conn, anchor);
-        layer_surface.set_margin(conn, 0, 0, 0, 0);
-        layer_surface.set_size(conn, 30, 30);
+        layer_surface.set_keyboard_interactivity(
+            conn.writer(),
+            zwlr_layer_surface_v1::KeyboardInteractivity::None as u32,
+        );
+        layer_surface.set_exclusive_zone(conn.writer(), 30);
+        layer_surface.set_anchor(conn.writer(), anchor);
+        layer_surface.set_margin(conn.writer(), 0, 0, 0, 0);
+        layer_surface.set_size(conn.writer(), 0, 30);
 
-        wl_surface.commit(conn);
+        wl_surface.commit(conn.writer());
 
         self.layer_surface = Some(layer_surface);
         self.wl_surface = Some(wl_surface);
     }
 
     fn on_wldisplay_event(&mut self, conn: &Connection, event: WlEvent) {
-        match self.wl_display.parse_event(event, conn) {
+        match self.wl_display.parse_event(conn.reader(), event) {
             wl_display::Event::Error {
                 object_id,
                 code,
@@ -186,29 +181,30 @@ impl WaylandState {
         let Some(wl_registry) = self.wl_registry.as_ref() else {
             return; // this should never be reached
         };
-        match wl_registry.parse_event(event, conn) {
+        match wl_registry.parse_event(conn.reader(), event) {
             wl_registry::Event::Global {
                 name,
                 interface,
                 version,
             } => match interface {
                 "wl_compositor" => {
-                    let wl_compositor = wl_registry.bind(&conn, name, interface, version);
+                    let wl_compositor = wl_registry.bind(conn.writer(), name, interface, version);
                     self.wl_compositor = Some(wl_compositor);
                 }
                 "wp_viewporter" => {
-                    let viewporter = wl_registry.bind(&conn, name, interface, version);
-                    self.viewporter = Some(viewporter);
+                    // let viewporter = wl_registry.bind(&conn.writer(), name, interface, version);
+                    // self.viewporter = Some(viewporter);
                 }
                 "zwlr_layer_shell_v1" => {
-                    let wlr_layer_shell = wl_registry.bind(&conn, name, interface, version);
+                    let wlr_layer_shell =
+                        wl_registry.bind(&conn.writer(), name, interface, version);
                     self.wlr_layer_shell = Some(wlr_layer_shell);
                 }
                 "wp_single_pixel_buffer_manager_v1" => {
                     let spm: WpSinglePixelBufferManagerV1 =
-                        wl_registry.bind(&conn, name, interface, version);
+                        wl_registry.bind(&conn.writer(), name, interface, version);
                     let wl_buffer = spm.create_u32_rgba_buffer(
-                        conn,
+                        conn.writer(),
                         (u32::MAX / 255) * 170,
                         (u32::MAX / 255) * 150,
                         (u32::MAX / 255) * 220,
@@ -216,19 +212,20 @@ impl WaylandState {
                     );
                     self.register_cb(Self::on_wlbuffer_event, wl_buffer.id());
                     self.wl_buffer = Some(wl_buffer);
-                    spm.destroy(conn);
+                    spm.destroy(conn.writer());
                 }
                 "wl_output" => {
-                    // let wl_output: WlOutput = wl_registry.bind(&conn, name, interface, version);
-                    // self.register_cb(Self::on_output_event, wl_output.id);
-                    // self.outputs.push(Output {
-                    //     wl_output,
-                    //     port: String::new(),
-                    //     name,
-                    //     width: 0,
-                    //     height: 0,
-                    //     ready: false,
-                    // });
+                    let wl_output: wl_output::WlOutput =
+                        wl_registry.bind(&conn.writer(), name, interface, version);
+                    self.register_cb(Self::on_output_event, wl_output.id());
+                    self.outputs.push(Output {
+                        wl_output,
+                        port: String::new(),
+                        name,
+                        width: 0,
+                        height: 0,
+                        ready: false,
+                    });
                 }
                 _ => {}
             },
@@ -240,27 +237,31 @@ impl WaylandState {
         let Some(layer_surface) = self.layer_surface.as_ref() else {
             return;
         };
-        match layer_surface.parse_event(event, conn) {
-            zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
-                if let Some(ref viewport) = self.viewport {
-                    viewport.set_destination(conn, width as i32, height as i32);
-                }
-                layer_surface.ack_configure(conn, serial);
+        match layer_surface.parse_event(conn.reader(), event) {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                // if let Some(ref viewport) = self.viewport {
+                //     viewport.set_destination(conn, width as i32, height as i32);
+                // }
+                layer_surface.ack_configure(conn.writer(), serial);
                 if !self.configured {
                     let Some(wl_surface) = self.wl_surface.as_ref() else {
                         unreachable!();
                         return;
                     };
-                    layer_surface.set_size(conn, width, height);
-                    wl_surface.attach(conn, self.wl_buffer.as_ref(), 0, 0);
+                    layer_surface.set_size(conn.writer(), width, height);
+                    wl_surface.attach(conn.writer(), self.wl_buffer.as_ref(), 0, 0);
                     // wl_surface.damage_buffer(conn, 0, 0, 500, 100);
-                    wl_surface.commit(conn);
+                    wl_surface.commit(conn.writer());
                     self.configured = true;
                 }
-            },
+            }
             zwlr_layer_surface_v1::Event::Closed => {
                 self.exit = true;
-            },
+            }
         }
     }
 
@@ -268,7 +269,7 @@ impl WaylandState {
         let Some(wl_surface) = self.wl_surface.as_ref() else {
             return;
         };
-        match wl_surface.parse_event(event, conn) {
+        match wl_surface.parse_event(conn.reader(), event) {
             _ => {}
         }
     }
@@ -277,8 +278,8 @@ impl WaylandState {
         let Some(wl_buffer) = self.wl_buffer.as_ref() else {
             return; // this should never be reached
         };
-        match wl_buffer.parse_event(event, conn) {
-            wl_buffer::Event::Release => {},
+        match wl_buffer.parse_event(conn.reader(), event) {
+            wl_buffer::Event::Release => {}
         }
     }
 
@@ -290,8 +291,32 @@ impl WaylandState {
         else {
             return;
         };
-        match output.wl_output.parse_event(event, conn) {
-            _ => {}
+        match output.wl_output.parse_event(conn.reader(), event) {
+            wl_output::Event::Geometry {
+                x,
+                y,
+                physical_width,
+                physical_height,
+                subpixel,
+                make,
+                model,
+                transform,
+            } => {}
+            wl_output::Event::Mode {
+                flags,
+                width,
+                height,
+                refresh,
+            } => {
+                output.width = width;
+                output.height = height;
+            }
+            wl_output::Event::Done => {
+                output.ready = true;
+            }
+            wl_output::Event::Scale { factor } => {}
+            wl_output::Event::Name { name } => output.port = name.into(),
+            wl_output::Event::Description { description } => {}
         }
     }
 

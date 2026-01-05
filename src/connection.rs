@@ -1,18 +1,15 @@
-#![allow(unused)]
-
 use crate::events::*;
 use crate::log;
-use crate::protocols::wayland::wl_display;
+use crate::wayland::wl_display;
 use std::sync::RwLock;
 use std::{
     cell::Cell,
-    io::{self, IoSlice, Read, Write},
+    io,
     marker::PhantomData,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         unix::net::UnixStream,
     },
-    rc::Rc,
 };
 
 use crate::utils::{Bucket, syscall};
@@ -27,11 +24,11 @@ pub static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| unsafe
     !env.is_null() && libc::strcmp(env, c"1".as_ptr().cast()) == 0
 });
 
+static IDCOUNTER: IdCounter = IdCounter::new();
+
 #[derive(Debug)]
 pub struct Connection {
     pub(crate) socket: UnixStream,
-    pub(crate) id_counter: IdCounter,
-
     pub(crate) reader: WaylandBuffer<Reader>,
     pub(crate) writer: WaylandBuffer<Writer>,
 }
@@ -41,19 +38,15 @@ impl Connection {
         let wayland_disp = std::env::var_os("WAYLAND_DISPLAY").unwrap_or("wayland-0".into());
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").unwrap_or("/tmp/".into());
         let socket = UnixStream::connect(std::path::PathBuf::from(runtime_dir).join(wayland_disp))?;
-        let debug = unsafe { !libc::getenv(c"WAYLAND_DEBUG".as_ptr()).is_null() };
-        if *TRACE {
-            log!(
-                TRACE,
-                "connected to wayland socket at {:?}",
-                socket.peer_addr().unwrap()
-            );
-        }
+        log!(
+            TRACE,
+            "connected to wayland socket at {:?}",
+            socket.peer_addr().unwrap()
+        );
         Ok(Self {
             reader: WaylandBuffer::<Reader>::new(socket.as_raw_fd()), // Thanks Rust
             writer: WaylandBuffer::<Writer>::new(socket.as_raw_fd()),
             socket,
-            id_counter: IdCounter::new(),
         })
     }
 
@@ -65,20 +58,6 @@ impl Connection {
         Object::from_id(1)
     }
 
-    pub fn new_id(&self) -> u32 {
-        self.id_counter.get_new()
-    }
-
-    pub fn write_request<const S: usize>(&self, msg: Message<S>) {
-        let mut data = self.writer.data.write().unwrap();
-        if data.can_fit(msg.data().len()) {
-            drop(data);
-            self.writer.send();
-        }
-        self.writer.write_msg(msg);
-    }
-
-    // TODO: have interior mutability instead of passing mut ref around
     pub fn dispatch_events<S: State>(&self, state: &mut S) -> io::Result<()> {
         let read = self.read_events()?;
         let data = self.reader.data.read().unwrap();
@@ -94,35 +73,30 @@ impl Connection {
         self.reader.recv()
     }
 
-    pub fn add_fd(&self, fd: RawFd) {
-        self.writer
-            .fds
-            .write()
-            .unwrap()
-            .push(unsafe { OwnedFd::from_raw_fd(fd) });
-        if *TRACE {
-            log!(TRACE, "Added fd {} to pool", fd,);
-        }
-    }
-
-    pub fn get_fd(&self) -> Option<OwnedFd> {
-        self.reader.fds.write().unwrap().pop()
-    }
-
     pub fn roundtrip(&self, state: &mut impl State) -> std::io::Result<()> {
         let display = self.display();
-        let wl_callback = display.sync(self);
+        let wl_callback = display.sync(&self.writer);
         let read = self.read_events()?;
         let data = self.reader.data.read().unwrap();
         let events = EventIter::new(&data[..read]);
         for event in events {
-            if event.header.id == wl_callback.id {
-                let _ = wl_callback.parse_event(event, self); // just for debugs
+            if wl_callback.id() == event.header.id {
+                wl_callback.parse_event(&self.reader, event); // just for debugs
                 break;
             }
             state.handle_event(self, event);
         }
         Ok(())
+    }
+
+    #[inline(always)]
+    pub fn writer(&self) -> &WaylandBuffer<Writer> {
+        &self.writer
+    }
+
+    #[inline(always)]
+    pub fn reader(&self) -> &WaylandBuffer<Reader> {
+        &self.reader
     }
 }
 
@@ -148,6 +122,8 @@ impl IdCounter {
     }
 }
 
+unsafe impl Sync for IdCounter {}
+
 #[derive(Debug)]
 pub struct Reader;
 #[derive(Debug)]
@@ -157,7 +133,7 @@ const MAX_BUFFER_SIZE: usize = 4096;
 
 //  TODO: find better way to handle interior mutability
 #[derive(Debug)]
-pub(crate) struct WaylandBuffer<T> {
+pub struct WaylandBuffer<T> {
     pub(crate) data: RwLock<Bucket<u8, MAX_BUFFER_SIZE>>,
     pub(crate) fds: RwLock<Bucket<OwnedFd, 8>>,
     pub(crate) display_fd: RawFd,
@@ -209,7 +185,7 @@ impl WaylandBuffer<Reader> {
 
             if msghdr.msg_controllen > 0 {
                 // lol this is probably not correct, works tho
-                let mut cmsghdr = *libc::CMSG_FIRSTHDR(&raw const msghdr);
+                let cmsghdr = *libc::CMSG_FIRSTHDR(&raw const msghdr);
                 if cmsghdr.cmsg_type == libc::SCM_RIGHTS {
                     let len = cmsghdr.cmsg_len;
                     let data = &buf[size_of::<libc::cmsghdr>()..len];
@@ -220,9 +196,7 @@ impl WaylandBuffer<Reader> {
                     for fd in raw_fds {
                         fds.push(OwnedFd::from_raw_fd(*fd));
                     }
-                    if *TRACE {
-                        log!(TRACE, "Recived ancillay data: {:?}", cmsghdr);
-                    }
+                    log!(TRACE, "Recived ancillay data: {:?}", cmsghdr);
                 }
             }
 
@@ -241,16 +215,24 @@ impl WaylandBuffer<Writer> {
         }
     }
 
-    pub fn write_msg<const S: usize>(&self, msg: Message<S>) {
-        self.data.write().unwrap().extend_from_slice(msg.data());
-        // self.data.extend_from_slice(msg.data());
+    pub fn new_id(&self) -> u32 {
+        IDCOUNTER.get_new()
     }
 
-    pub fn add_fd(&mut self, fd: RawFd) {
+    pub fn write_request(&self, msg: &[u8]) {
+        if !self.data.read().unwrap().can_fit(msg.len()) {
+            log!(TRACE, "Buffer can't fit additional {} bytes", msg.len());
+            self.send().unwrap();
+        }
+        self.data.write().unwrap().extend_from_slice(msg);
+    }
+
+    pub fn add_fd(&self, fd: RawFd) {
         self.fds
             .write()
             .unwrap()
             .push(unsafe { OwnedFd::from_raw_fd(fd) });
+        log!(TRACE, "Added fd {} to pool", fd,);
     }
 
     pub fn send(&self) -> std::io::Result<()> {
@@ -285,7 +267,7 @@ impl WaylandBuffer<Writer> {
                     iov_len: data.len(),
                 };
 
-                let mut msghdr = libc::msghdr {
+                let msghdr = libc::msghdr {
                     msg_iov: &raw mut io,
                     msg_iovlen: 1,
                     msg_control: buf.as_mut_ptr().cast(),
@@ -295,7 +277,7 @@ impl WaylandBuffer<Writer> {
                     msg_flags: 0,
                 };
 
-                let mut cmsghdr = libc::CMSG_FIRSTHDR(&raw const msghdr);
+                let cmsghdr = libc::CMSG_FIRSTHDR(&raw const msghdr);
                 // ?? I'm not sure if this exactly correct
                 (*cmsghdr).cmsg_len = libc::CMSG_LEN(fds_len as u32) as usize;
                 (*cmsghdr).cmsg_level = libc::SOL_SOCKET;
@@ -311,15 +293,13 @@ impl WaylandBuffer<Writer> {
         };
 
         let data_len = data.len();
-        if *TRACE {
-            log!(
-                TRACE,
-                "Written {} bytes to fd {} out of {}",
-                len,
-                self.display_fd,
-                data_len,
-            );
-        }
+        log!(
+            TRACE,
+            "Written {} bytes to fd {} out of {}",
+            len,
+            self.display_fd,
+            data_len,
+        );
         debug_assert_eq!(data_len, len as usize); // ??
         unsafe {
             data.set_len(data_len - (len as usize));
@@ -332,14 +312,11 @@ pub trait Object {
     type Event<'a>;
     fn from_id(id: u32) -> Self;
 
-    #[inline(always)]
     fn id(&self) -> u32;
 
     fn interface(&self) -> &'static str;
 
     fn parse_event<'a>(
-        &self, event: crate::events::WlEvent<'a>, conn: &Connection,
-    ) -> Self::Event<'a> {
-        todo!()
-    }
+        &self, reader: &WaylandBuffer<Reader>, event: crate::events::WlEvent<'a>,
+    ) -> Self::Event<'a>;
 }

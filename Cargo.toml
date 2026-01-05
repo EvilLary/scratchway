@@ -1,8 +1,20 @@
+[workspace]
+resolver = "1"
+members = [
+    "scr_scanner",
+    "scr_protocols"
+]
+
 [package]
 name = "scratchway"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
 libc = { version = "0.2.178", features = ["extra_traits"] }
-# scr_scanner = { path = "./scr_scanner/" }
+scr_scanner = { path = "./scr_scanner" }
+
+[build-dependencies]
+
+[dev-dependencies]
+scr_protocols = { path = "./scr_protocols" }

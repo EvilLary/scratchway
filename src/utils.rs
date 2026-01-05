@@ -199,13 +199,17 @@ macro_rules! log {
         eprintln!("[\x1b[34mDEBUG\x1b[0m]: {}", format_args!($($arg)*));
     }};
     (TRACE, $($arg:tt)*) => {{
-        eprintln!("[\x1b[36mTRACE\x1b[0m]: {}", format_args!($($arg)*));
+        if *$crate::connection::TRACE {
+            eprintln!("[\x1b[36mTRACE\x1b[0m]: {}", format_args!($($arg)*));
+        }
     }};
     (WARNING, $($arg:tt)*) => {{
         eprintln!("[\x1b[33mWARNING\x1b[0m]: {}", format_args!($($arg)*));
     }};
     (WAYLAND, $($arg:tt)*) => {{
-        eprintln!("[\x1b[35mWAYLAND-DEBUG\x1b[0m]: {}", format_args!($($arg)*));
+        if *$crate::connection::DEBUG {
+            eprintln!("[\x1b[35mWAYLAND-DEBUG\x1b[0m]: {}", format_args!($($arg)*));
+        }
     }};
     () => {};
 }
