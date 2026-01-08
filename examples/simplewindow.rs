@@ -230,7 +230,9 @@ impl App {
                 self.exit = true;
             }
             wl_display::Event::DeleteId { id } => {
-                self.callbacks.retain(|(obj_id, _)| id != *obj_id)
+                if let Some(pos) = self.callbacks.iter().position(|o| id == o.0) {
+                    let _ = self.callbacks.swap_remove(pos);
+                }
             }
         }
     }

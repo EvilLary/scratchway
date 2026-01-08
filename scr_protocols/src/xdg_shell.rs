@@ -1,6 +1,9 @@
+#![allow(unused_mut, unused)]
+
 use scratchway::wayland::*;
-use scratchway::{log, Object};
-use scratchway::connection::{Reader, Writer, WaylandBuffer};
-use scratchway::events::{Message, WlEvent};
+use scratchway::connection::{Reader, WaylandBuffer, Writer};
+use scratchway::events::*;
+use scratchway::prelude::*;
+use scratchway::log;
 
 scr_scanner::generate!("./protocols/xdg-shell.xml");

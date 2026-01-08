@@ -2,12 +2,12 @@
 
 use crate::connection::{Reader, WaylandBuffer, Writer};
 use crate::events::*;
-use crate::{Connection, Object, log};
+use crate::prelude::*;
+use crate::log;
 
 pub mod wl_display {
     use super::*;
 
-    #[derive(Debug)]
     pub struct WlDisplay {
         pub(crate) id: u32,
         pub(crate) interface: &'static str,
@@ -22,20 +22,32 @@ pub mod wl_display {
         pub fn sync(&self, writer: &WaylandBuffer<Writer>) -> wl_callback::WlCallback {
             let mut msg = Message::<12>::new(self.id, 0);
             let new_id = writer.new_id();
+            let new_cb = Object::from_id(new_id);
             msg.write_u32(new_id);
             msg.build();
             writer.write_request(msg.data());
-            log!(WAYLAND, "wl_display.sync({})", new_id);
-            Object::from_id(new_id)
+            log!(WAYLAND, "wl_display.sync(new {})", new_cb);
+            new_cb
         }
         pub fn get_registry(&self, writer: &WaylandBuffer<Writer>) -> wl_registry::WlRegistry {
             let mut msg = Message::<12>::new(self.id, 1);
             let new_id = writer.new_id();
+            let new_ty = Object::from_id(new_id);
             msg.write_u32(new_id);
             msg.build();
             writer.write_request(msg.data());
-            log!(WAYLAND, "wl_display.get_registry({})", new_id);
-            Object::from_id(new_id)
+            log!(WAYLAND, "wl_display.get_registry(new {})", new_ty);
+            new_ty
+        }
+    }
+    impl ::std::fmt::Display for WlDisplay {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
+        }
+    }
+    impl ::std::fmt::Debug for WlDisplay {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
         }
     }
     #[derive(Debug)]
@@ -105,7 +117,6 @@ pub mod wl_display {
 pub mod wl_registry {
     use super::*;
 
-    #[derive(Debug)]
     pub struct WlRegistry {
         pub(crate) id: u32,
         pub(crate) interface: &'static str,
@@ -125,14 +136,24 @@ pub mod wl_registry {
             writer.write_request(msg.data());
             log!(
                 WAYLAND,
-                "wl_registry#{}.bind({}, {}, {}, {})",
-                self.id,
+                "{}.bind(new {}#{}, {}, {})",
+                self,
+                interface,
                 new_id,
                 name,
-                interface,
                 version
             );
             Object::from_id(new_id)
+        }
+    }
+    impl ::std::fmt::Display for WlRegistry {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
+        }
+    }
+    impl ::std::fmt::Debug for WlRegistry {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
         }
     }
     #[derive(Debug)]
@@ -171,8 +192,8 @@ pub mod wl_registry {
                     let version = parser.get_u32();
                     log!(
                         WAYLAND,
-                        "==> wl_registry#{}.global({}, {}, {})",
-                        self.id,
+                        "==> {}.global({}, {}, {})",
+                        self,
                         name,
                         interface,
                         version
@@ -187,8 +208,8 @@ pub mod wl_registry {
                     let name = parser.get_u32();
                     log!(
                         WAYLAND,
-                        "==> wl_registry#{}.global_remove({})",
-                        self.id,
+                        "==> {}.global_remove({})",
+                        self,
                         name
                     );
                     Self::Event::GlobalRemove { name }

@@ -9,7 +9,4 @@ pub mod prelude {
     pub use crate::events::WlEvent;
 }
 
-pub use connection::{State, Object, Connection};
-pub use events::WlEvent;
-
 mod utils;

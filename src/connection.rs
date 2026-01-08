@@ -141,7 +141,7 @@ pub struct WaylandBuffer<T> {
 }
 
 impl WaylandBuffer<Reader> {
-    pub fn new(display_fd: RawFd) -> WaylandBuffer<Reader> {
+    fn new(display_fd: RawFd) -> WaylandBuffer<Reader> {
         Self {
             data: RwLock::new(Bucket::full()),
             fds: RwLock::new(Bucket::new()),
@@ -154,7 +154,7 @@ impl WaylandBuffer<Reader> {
         self.fds.write().unwrap().pop()
     }
 
-    pub fn recv(&self) -> std::io::Result<usize> {
+    fn recv(&self) -> std::io::Result<usize> {
         let mut buf = [0u8; 56];
         let mut fds = self.fds.write().unwrap();
         fds.clear();
@@ -199,14 +199,14 @@ impl WaylandBuffer<Reader> {
                     log!(TRACE, "Recived ancillay data: {:?}", cmsghdr);
                 }
             }
-
+            log!(TRACE, "Recieved {} bytes from fd {}", len, self.display_fd);
             Ok(len as usize)
         }
     }
 }
 
 impl WaylandBuffer<Writer> {
-    pub fn new(display_fd: RawFd) -> WaylandBuffer<Writer> {
+    fn new(display_fd: RawFd) -> WaylandBuffer<Writer> {
         Self {
             data: RwLock::new(Bucket::new()),
             fds: RwLock::new(Bucket::new()),
@@ -235,7 +235,7 @@ impl WaylandBuffer<Writer> {
         log!(TRACE, "Added fd {} to pool", fd,);
     }
 
-    pub fn send(&self) -> std::io::Result<()> {
+    fn send(&self) -> std::io::Result<()> {
         let mut data = self.data.write().unwrap();
         let mut fds = self.fds.write().unwrap();
         if data.empty() {
