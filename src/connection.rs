@@ -98,6 +98,10 @@ impl Connection {
     pub fn reader(&self) -> &WaylandBuffer<Reader> {
         &self.reader
     }
+
+    pub fn flush(&self) -> std::io::Result<()> {
+        self.writer().send()
+    }
 }
 
 pub trait State {
