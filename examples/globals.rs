@@ -10,7 +10,11 @@ fn main() -> std::io::Result<()> {
 
     let mut app = App { registry };
 
-    conn.roundtrip(&mut app)
+    conn.roundtrip(&mut app)?;
+
+    loop {
+        conn.dispatch_events(&mut app)?;
+    }
 }
 
 struct App {
@@ -21,13 +25,15 @@ impl App {
     fn on_wlregistry(&mut self, conn: &Connection, event: scratchway::events::WlEvent<'_>) {
         match self.registry.parse_event(conn.reader(), event) {
             wl_registry::Event::Global {
-                interface, version, ..
+                interface, version, name
             } => match interface {
                 _ => {
-                    println!("Global ==> {}, version: {}", interface, version);
+                    println!("Global ==> {}, name: {}", interface, name);
                 }
             },
-            wl_registry::Event::GlobalRemove { .. } => {}
+            wl_registry::Event::GlobalRemove { name } => {
+                println!("GlobalRemove ==> name: {}", name);
+            }
         }
     }
 }

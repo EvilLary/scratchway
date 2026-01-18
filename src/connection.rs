@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::events::*;
 use crate::log;
 use crate::wayland::wl_display;
@@ -81,7 +82,7 @@ impl Connection {
         let events = EventIter::new(&data[..read]);
         for event in events {
             if wl_callback.id() == event.header.id {
-                wl_callback.parse_event(&self.reader, event); // just for debugs
+                let _ = wl_callback.parse_event(&self.reader, event); // just for debugs
                 break;
             }
             state.handle_event(self, event);

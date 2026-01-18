@@ -494,6 +494,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             pub mod #iface_mod {
                 use super::*;
+                #[derive(Clone)]
                 pub struct #object_name {
                     id: u32,
                     interface: &'static str
