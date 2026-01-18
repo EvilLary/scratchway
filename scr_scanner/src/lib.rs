@@ -235,7 +235,8 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 format!("{})", &msg[..end])
             };
             quote!{
-                pub fn #req_idnt(&self, writer: &WaylandBuffer<Writer>, #(#params,)*) -> #return_ty {
+                pub fn #req_idnt<S>(&self, conn: &Connection<S>, #(#params,)*) -> #return_ty {
+                    let writer = conn.writer();
                     let mut msg = Message::<#size>::new(self.id, #opcode);
                     #(#fn_body)*
                     writer.write_request(msg.data());
@@ -529,7 +530,8 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     fn interface(&self) -> &'static str {
                         Self::INTERFACE
                     }
-                    fn parse_event<'a>(&self, reader: &WaylandBuffer<Reader>, event: WlEvent<'a>) -> Self::Event<'a> {
+                    fn parse_event<'a, S>(&self, conn: &Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
+                        let reader = conn.reader();
                         #parse_body
                     }
                 }

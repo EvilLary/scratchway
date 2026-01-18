@@ -5,17 +5,14 @@ use std::mem::MaybeUninit;
 // Pretty much a copy-cat of rust's Vec
 #[derive(Debug)]
 pub struct Bucket<T, const S: usize> {
-    data: MaybeUninit<[T; S]>,
-    len:  usize,
+    data: MaybeUninit<[T; S]>, // FIXME: MaybeUninit on inner
+    len: usize,
 }
 
 impl<T, const S: usize> Bucket<T, S> {
     pub const fn new() -> Self {
         let data = MaybeUninit::uninit();
-        Self {
-            data,
-            len: 0,
-        }
+        Self { data, len: 0 }
     }
 
     pub const fn full() -> Self {
@@ -37,7 +34,7 @@ impl<T, const S: usize> Bucket<T, S> {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 
@@ -72,7 +69,7 @@ impl<T, const S: usize> Bucket<T, S> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<T> {
+    pub const fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
         }
@@ -86,12 +83,12 @@ impl<T, const S: usize> Bucket<T, S> {
     }
 
     #[inline]
-    unsafe fn data(&self) -> &[T; S] {
+    const unsafe fn data(&self) -> &[T; S] {
         unsafe { self.data.as_ptr().as_ref().unwrap_unchecked() }
     }
 
     #[inline]
-    unsafe fn data_mut(&mut self) -> &mut [T; S] {
+    const unsafe fn data_mut(&mut self) -> &mut [T; S] {
         unsafe { self.data.as_mut_ptr().as_mut().unwrap_unchecked() }
     }
 
@@ -101,7 +98,7 @@ impl<T, const S: usize> Bucket<T, S> {
     }
 
     #[inline]
-    pub fn as_mut_ptr(&mut self) -> *mut T {
+    pub const fn as_mut_ptr(&mut self) -> *mut T {
         self.data.as_mut_ptr().cast()
     }
 

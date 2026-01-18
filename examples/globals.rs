@@ -1,14 +1,18 @@
-// #![allow(unused)]
+#![allow(unused)]
 
 use scratchway::prelude::*;
 use scratchway::wayland::*;
 
 fn main() -> std::io::Result<()> {
-    let conn = Connection::connect()?;
+    let mut conn = Connection::connect()?;
     let display = conn.display();
-    let registry = display.get_registry(conn.writer());
+    let registry = display.get_registry(&conn);
 
     let mut app = App { registry };
+
+    conn.add_callback(&app.registry, App::on_wlregistry);
+    conn.add_callback(&display, App::on_wldisplay);
+
 
     conn.roundtrip(&mut app)?;
 
@@ -22,13 +26,15 @@ struct App {
 }
 
 impl App {
-    fn on_wlregistry(&mut self, conn: &Connection, event: scratchway::events::WlEvent<'_>) {
-        match self.registry.parse_event(conn.reader(), event) {
+    fn on_wlregistry(&mut self, conn: &mut Connection<Self>, event: scratchway::events::WlEvent) {
+        match self.registry.parse_event(conn, &event) {
             wl_registry::Event::Global {
-                interface, version, name
+                interface,
+                version,
+                name,
             } => match interface {
                 _ => {
-                    println!("Global ==> {}, name: {}", interface, name);
+                    println!("Global ==> name: {:02}, {}", name, interface);
                 }
             },
             wl_registry::Event::GlobalRemove { name } => {
@@ -36,19 +42,10 @@ impl App {
             }
         }
     }
-}
-
-impl State for App {
-    fn handle_event(&mut self, conn: &Connection, event: scratchway::events::WlEvent<'_>) {
-        let display = conn.display();
-        match event.header.id {
-            1 => {
-                println!("{:?}", display.parse_event(conn.reader(), event));
-            }
-            2 => {
-                self.on_wlregistry(conn, event);
-            }
-            _ => {}
+    fn on_wldisplay(&mut self, conn: &mut Connection<Self>, event: scratchway::events::WlEvent) {
+        match conn.display().parse_event(conn, &event) {
+            wl_display::Event::Error { object_id, code, message } => {},
+            wl_display::Event::DeleteId { id } => {},
         }
     }
 }

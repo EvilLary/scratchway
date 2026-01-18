@@ -1,8 +1,8 @@
 #![allow(unused)]
 
-use scratchway::wayland::*;
 use scratchway::log;
 use scratchway::prelude::*;
+use scratchway::wayland::*;
 
 use scr_protocols::{
     single_pixel_buffer_v1::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1,
@@ -12,21 +12,18 @@ use scr_protocols::{
 };
 
 fn main() -> std::io::Result<()> {
-    let conn = Connection::connect()?;
+    let mut conn = Connection::connect()?;
     let target_output = std::env::args().skip(1).next();
 
     let wl_display = conn.display();
-    let wl_registry = wl_display.get_registry(conn.writer());
+    let wl_registry = wl_display.get_registry(&conn);
 
-    let mut callbacks: Vec<(u32, Callback)> = vec![
-        (wl_registry.id(), WaylandState::on_registry_event),
-        (wl_display.id(), WaylandState::on_wldisplay_event),
-    ];
+    conn.add_callback(&wl_registry, WaylandState::on_registry_event);
+    conn.add_callback(&wl_display, WaylandState::on_wldisplay_event);
 
     let mut state = WaylandState {
         wl_display,
         wl_registry: Some(wl_registry),
-        callbacks,
         ..Default::default()
     };
 
@@ -44,7 +41,7 @@ fn main() -> std::io::Result<()> {
 
     conn.roundtrip(&mut state)?;
 
-    state.init_layer(&conn, target_output);
+    state.init_layer(&mut conn, target_output);
 
     while !state.exit {
         conn.dispatch_events(&mut state)?;
@@ -63,11 +60,8 @@ struct Output {
     ready: bool,
 }
 
-type Callback = fn(&mut WaylandState, &Connection, WlEvent<'_>);
 #[derive(Debug, Default)]
 struct WaylandState {
-    callbacks: Vec<(u32, Callback)>,
-
     wl_display: wl_display::WlDisplay,
     wl_registry: Option<wl_registry::WlRegistry>,
     wl_compositor: Option<wl_compositor::WlCompositor>,
@@ -88,27 +82,12 @@ struct WaylandState {
     exit: bool,
 }
 
-impl State for WaylandState {
-    fn handle_event(&mut self, conn: &Connection, event: WlEvent<'_>) {
-        if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
-            cb(self, conn, event)
-        } else {
-            log!(
-                ERR,
-                " Unhandled event for id: {}, opcode: {}",
-                event.header.id,
-                event.header.opcode
-            )
-        }
-    }
-}
-
 impl WaylandState {
-    fn init_layer(&mut self, conn: &Connection, target: Option<String>) {
+    fn init_layer(&mut self, conn: &mut Connection<Self>, target: Option<String>) {
         let wl_compositor = unsafe { self.wl_compositor.as_ref().unwrap_unchecked() };
 
-        let wl_surface = wl_compositor.create_surface(conn.writer());
-        self.register_cb(Self::on_wlsurface_event, wl_surface.id());
+        let wl_surface = wl_compositor.create_surface(conn);
+        conn.add_callback(&wl_surface, Self::on_wlsurface_event);
 
         let wl_buffer = unsafe { self.wl_buffer.as_ref().unwrap_unchecked() };
         let wlr_layer_shell = unsafe { self.wlr_layer_shell.as_ref().unwrap_unchecked() };
@@ -132,8 +111,8 @@ impl WaylandState {
         };
 
         let layer_surface =
-            wlr_layer_shell.get_layer_surface(conn.writer(), &wl_surface, None, 2, "crosshair");
-        self.register_cb(Self::on_layersurface_event, layer_surface.id());
+            wlr_layer_shell.get_layer_surface(conn, &wl_surface, None, 2, "crosshair");
+        conn.add_callback(&layer_surface, Self::on_layersurface_event, );
 
         // if let Some(ref viewporter) = self.viewporter {
         //     let viewport = viewporter.get_viewport(conn, &wl_surface);
@@ -147,22 +126,22 @@ impl WaylandState {
             | zwlr_layer_surface_v1::ANCHOR_TOP;
 
         layer_surface.set_keyboard_interactivity(
-            conn.writer(),
+            conn,
             zwlr_layer_surface_v1::KeyboardInteractivity::None as u32,
         );
-        layer_surface.set_exclusive_zone(conn.writer(), 30);
-        layer_surface.set_anchor(conn.writer(), anchor);
-        layer_surface.set_margin(conn.writer(), 0, 0, 0, 0);
-        layer_surface.set_size(conn.writer(), 0, 30);
+        layer_surface.set_exclusive_zone(conn, 30);
+        layer_surface.set_anchor(conn, anchor);
+        layer_surface.set_margin(conn, 0, 0, 0, 0);
+        layer_surface.set_size(conn, 0, 30);
 
-        wl_surface.commit(conn.writer());
+        wl_surface.commit(conn);
 
         self.layer_surface = Some(layer_surface);
         self.wl_surface = Some(wl_surface);
     }
 
-    fn on_wldisplay_event(&mut self, conn: &Connection, event: WlEvent) {
-        match self.wl_display.parse_event(conn.reader(), event) {
+    fn on_wldisplay_event(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
+        match self.wl_display.parse_event(conn, &event) {
             wl_display::Event::Error {
                 object_id,
                 code,
@@ -172,52 +151,51 @@ impl WaylandState {
                 self.exit = true;
             }
             wl_display::Event::DeleteId { id } => {
-                self.callbacks.retain(|(obj_id, _)| id != *obj_id)
+                conn.remove_callback(id);
             }
         }
     }
 
-    fn on_registry_event(&mut self, conn: &Connection, event: WlEvent) {
+    fn on_registry_event(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let Some(wl_registry) = self.wl_registry.as_ref() else {
             return; // this should never be reached
         };
-        match wl_registry.parse_event(conn.reader(), event) {
+        match wl_registry.parse_event(conn, &event) {
             wl_registry::Event::Global {
                 name,
                 interface,
                 version,
             } => match interface {
                 "wl_compositor" => {
-                    let wl_compositor = wl_registry.bind(conn.writer(), name, interface, version);
+                    let wl_compositor = wl_registry.bind(conn, name, interface, version);
                     self.wl_compositor = Some(wl_compositor);
                 }
                 "wp_viewporter" => {
-                    // let viewporter = wl_registry.bind(&conn.writer(), name, interface, version);
+                    // let viewporter = wl_registry.bind(&conn, name, interface, version);
                     // self.viewporter = Some(viewporter);
                 }
                 "zwlr_layer_shell_v1" => {
-                    let wlr_layer_shell =
-                        wl_registry.bind(&conn.writer(), name, interface, version);
+                    let wlr_layer_shell = wl_registry.bind(&conn, name, interface, version);
                     self.wlr_layer_shell = Some(wlr_layer_shell);
                 }
                 "wp_single_pixel_buffer_manager_v1" => {
                     let spm: WpSinglePixelBufferManagerV1 =
-                        wl_registry.bind(&conn.writer(), name, interface, version);
+                        wl_registry.bind(&conn, name, interface, version);
                     let wl_buffer = spm.create_u32_rgba_buffer(
-                        conn.writer(),
+                        conn,
                         (u32::MAX / 255) * 170,
                         (u32::MAX / 255) * 150,
                         (u32::MAX / 255) * 220,
                         (u32::MAX / 255) * ((100 * 255) / 100),
                     );
-                    self.register_cb(Self::on_wlbuffer_event, wl_buffer.id());
+                    conn.add_callback(&wl_buffer, Self::on_wlbuffer_event);
                     self.wl_buffer = Some(wl_buffer);
-                    spm.destroy(conn.writer());
+                    spm.destroy(conn);
                 }
                 "wl_output" => {
                     let wl_output: wl_output::WlOutput =
-                        wl_registry.bind(&conn.writer(), name, interface, version);
-                    self.register_cb(Self::on_output_event, wl_output.id());
+                        wl_registry.bind(&conn, name, interface, version);
+                    conn.add_callback(&wl_output, Self::on_output_event);
                     self.outputs.push(Output {
                         wl_output,
                         port: String::new(),
@@ -233,11 +211,11 @@ impl WaylandState {
         }
     }
 
-    fn on_layersurface_event(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_layersurface_event(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let Some(layer_surface) = self.layer_surface.as_ref() else {
             return;
         };
-        match layer_surface.parse_event(conn.reader(), event) {
+        match layer_surface.parse_event(conn, &event) {
             zwlr_layer_surface_v1::Event::Configure {
                 serial,
                 width,
@@ -246,16 +224,16 @@ impl WaylandState {
                 // if let Some(ref viewport) = self.viewport {
                 //     viewport.set_destination(conn, width as i32, height as i32);
                 // }
-                layer_surface.ack_configure(conn.writer(), serial);
+                layer_surface.ack_configure(conn, serial);
                 if !self.configured {
                     let Some(wl_surface) = self.wl_surface.as_ref() else {
                         unreachable!();
                         return;
                     };
-                    layer_surface.set_size(conn.writer(), width, height);
-                    wl_surface.attach(conn.writer(), self.wl_buffer.as_ref(), 0, 0);
+                    layer_surface.set_size(conn, width, height);
+                    wl_surface.attach(conn, self.wl_buffer.as_ref(), 0, 0);
                     // wl_surface.damage_buffer(conn, 0, 0, 500, 100);
-                    wl_surface.commit(conn.writer());
+                    wl_surface.commit(conn);
                     self.configured = true;
                 }
             }
@@ -265,25 +243,25 @@ impl WaylandState {
         }
     }
 
-    fn on_wlsurface_event(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_wlsurface_event(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let Some(wl_surface) = self.wl_surface.as_ref() else {
             return;
         };
-        match wl_surface.parse_event(conn.reader(), event) {
+        match wl_surface.parse_event(conn, &event) {
             _ => {}
         }
     }
 
-    fn on_wlbuffer_event(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_wlbuffer_event(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let Some(wl_buffer) = self.wl_buffer.as_ref() else {
             return; // this should never be reached
         };
-        match wl_buffer.parse_event(conn.reader(), event) {
+        match wl_buffer.parse_event(conn, &event) {
             wl_buffer::Event::Release => {}
         }
     }
 
-    fn on_output_event(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_output_event(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let Some(output) = self
             .outputs
             .iter_mut()
@@ -291,7 +269,7 @@ impl WaylandState {
         else {
             return;
         };
-        match output.wl_output.parse_event(conn.reader(), event) {
+        match output.wl_output.parse_event(conn, &event) {
             wl_output::Event::Geometry {
                 x,
                 y,
@@ -318,10 +296,6 @@ impl WaylandState {
             wl_output::Event::Name { name } => output.port = name.into(),
             wl_output::Event::Description { description } => {}
         }
-    }
-
-    fn register_cb(&mut self, cb: Callback, id: u32) {
-        self.callbacks.push((id, cb));
     }
 }
 

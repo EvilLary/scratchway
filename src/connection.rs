@@ -2,6 +2,8 @@
 use crate::events::*;
 use crate::log;
 use crate::wayland::wl_display;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::RwLock;
 use std::{
     cell::Cell,
@@ -27,27 +29,68 @@ pub static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| unsafe
 
 static IDCOUNTER: IdCounter = IdCounter::new();
 
+type CallbackFn<S> = fn(&mut S, &mut Connection<S>, WlEvent);
+
 #[derive(Debug)]
-pub struct Connection {
+pub struct ObjectManager<S> {
+    pub objects: HashMap<u32, CallbackFn<S>>,
+}
+
+impl<S> ObjectManager<S> {
+    fn add(&mut self, id: u32, cb: CallbackFn<S>) {
+        self.objects.insert(id, cb);
+    }
+
+    fn get(&self, id: u32) -> Option<CallbackFn<S>> {
+        self.objects.get(&id).copied()
+    }
+
+    fn rm(&mut self, id: u32) -> Option<CallbackFn<S>> {
+        self.objects.remove(&id)
+    }
+}
+
+#[derive(Debug)]
+pub struct Connection<S> {
     pub(crate) socket: UnixStream,
     pub(crate) reader: WaylandBuffer<Reader>,
     pub(crate) writer: WaylandBuffer<Writer>,
+    pub(crate) event_queue: VecDeque<WlEvent>,
+    object_mgr: ObjectManager<S>,
 }
 
-impl Connection {
+// FIXME FIXME FIXME FIXME FIXME FIXME
+// FIXME FIXME FIXME FIXME FIXME FIXME
+// FIXME FIXME FIXME FIXME FIXME FIXME
+// FIXME FIXME FIXME FIXME FIXME FIXME
+// Fix this mess
+impl<S> Connection<S> {
+    pub const WL_DISPLAY_ID: u32 = 1;
+
     pub fn connect() -> std::io::Result<Self> {
-        let wayland_disp = std::env::var_os("WAYLAND_DISPLAY").unwrap_or("wayland-0".into());
-        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").unwrap_or("/tmp/".into());
+        let wayland_disp = std::env::var_os("WAYLAND_DISPLAY")
+            .ok_or(std::io::Error::other("WAYLAND_DISPLAY isn't set"))?;
+
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .ok_or(std::io::Error::other("XDG_RUNTIME_DIR isn't set"))?;
+
         let socket = UnixStream::connect(std::path::PathBuf::from(runtime_dir).join(wayland_disp))?;
+        let callback_mgr = ObjectManager {
+            objects: HashMap::new(),
+        };
+
         log!(
             TRACE,
             "connected to wayland socket at {:?}",
             socket.peer_addr().unwrap()
         );
+
         Ok(Self {
             reader: WaylandBuffer::<Reader>::new(socket.as_raw_fd()), // Thanks Rust
             writer: WaylandBuffer::<Writer>::new(socket.as_raw_fd()),
             socket,
+            event_queue: VecDeque::new(),
+            object_mgr: callback_mgr,
         })
     }
 
@@ -56,36 +99,49 @@ impl Connection {
     }
 
     pub fn display(&self) -> wl_display::WlDisplay {
-        Object::from_id(1)
+        Object::from_id(Self::WL_DISPLAY_ID)
     }
 
-    pub fn dispatch_events<S: State>(&self, state: &mut S) -> io::Result<()> {
-        let read = self.read_events()?;
-        let data = self.reader.data.read().unwrap();
-        let events = EventIter::new(&data[..read]);
-        for event in events {
-            state.handle_event(self, event);
+    pub fn dispatch_events(&mut self, state: &mut S) -> io::Result<()> {
+        self.read_events();
+        while let Some(event) = self.event_queue.pop_front() {
+            self.send_event(state, event);
         }
         Ok(())
     }
 
-    fn read_events(&self) -> io::Result<usize> {
-        self.writer.send()?;
-        self.reader.recv()
+    fn send_event(&mut self, state: &mut S, event: WlEvent) {
+        // if event.header.id == Self::WL_DISPLAY_ID {
+        //     self.handle_wldisplay(&event);
+        // }
+
+        if let Some(cb) = self.object_mgr.get(event.header.id) {
+            cb(state, self, event);
+        } else {
+            log!(WAYLAND, "discareded event for #{}", event.header.id);
+        }
     }
 
-    pub fn roundtrip(&self, state: &mut impl State) -> std::io::Result<()> {
-        let display = self.display();
-        let wl_callback = display.sync(&self.writer);
-        let read = self.read_events()?;
+    fn read_events(&mut self) -> io::Result<()> {
+        self.flush()?;
+        let len = self.reader.recv()?;
         let data = self.reader.data.read().unwrap();
-        let events = EventIter::new(&data[..read]);
-        for event in events {
+        self.event_queue.extend(EventIter::new(&data[..len]));
+        Ok(())
+    }
+
+    pub fn roundtrip(&mut self, state: &mut S) -> std::io::Result<()> {
+        self.dispatch_events(state);
+
+        let display = self.display();
+        let wl_callback = display.sync(self);
+
+        while let Some(event) = self.event_queue.pop_front() {
             if wl_callback.id() == event.header.id {
-                let _ = wl_callback.parse_event(&self.reader, event); // just for debugs
+                wl_callback.parse_event(self, &event);
                 break;
             }
-            state.handle_event(self, event);
+            self.send_event(state, event);
         }
         Ok(())
     }
@@ -100,13 +156,36 @@ impl Connection {
         &self.reader
     }
 
+    fn handle_wldisplay(&mut self, event: &WlEvent) -> std::io::Result<()> {
+        match self.display().parse_event(self, event) {
+            // FIXME
+            wl_display::Event::Error {
+                object_id,
+                code,
+                message,
+            } => {}
+            wl_display::Event::DeleteId { id } => self.remove_callback(id),
+        }
+        Ok(())
+    }
+
     pub fn flush(&self) -> std::io::Result<()> {
         self.writer().send()
+    }
+
+    pub fn add_callback(&mut self, object: &impl Object, cb: CallbackFn<S>) {
+        self.object_mgr.add(object.id(), cb);
+    }
+
+    pub fn remove_callback(&mut self, id: u32) {
+        let _ = self.object_mgr.rm(id);
     }
 }
 
 pub trait State {
-    fn handle_event(&mut self, conn: &Connection, event: WlEvent<'_>);
+    fn handle_event(&mut self, conn: &Connection<Self>, event: WlEvent)
+    where
+        Self: Sized;
 }
 
 #[derive(Debug)]
@@ -321,7 +400,7 @@ pub trait Object {
 
     fn interface(&self) -> &'static str;
 
-    fn parse_event<'a>(
-        &self, reader: &WaylandBuffer<Reader>, event: crate::events::WlEvent<'a>,
+    fn parse_event<'a, S>(
+        &self, conn: &Connection<S>, event: &'a crate::events::WlEvent,
     ) -> Self::Event<'a>;
 }

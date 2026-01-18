@@ -14,7 +14,7 @@ impl<'a> EventIter<'a> {
 }
 
 impl<'a> Iterator for EventIter<'a> {
-    type Item = WlEvent<'a>;
+    type Item = WlEvent;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.buf.len() < Header::HEADER_SIZE {
@@ -43,6 +43,8 @@ impl<'a> Iterator for EventIter<'a> {
             return None; // Thanks kwin
         };
 
+        let data = data.into();
+
         if self.buf.len() <= header.size as usize {
             self.buf = &[];
         } else {
@@ -53,15 +55,15 @@ impl<'a> Iterator for EventIter<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct WlEvent<'a> {
+#[derive(Debug)]
+pub struct WlEvent {
     pub header: Header,
-    pub data: &'a [u8],
+    pub data: Vec<u8>,
 }
 
-impl<'a> WlEvent<'a> {
-    pub fn parser(&self) -> EventDataParser<'a> {
-        EventDataParser::new(self.data)
+impl WlEvent {
+    pub fn parser(&self) -> EventDataParser<'_> {
+        EventDataParser::new(self.data.as_ref())
     }
 }
 

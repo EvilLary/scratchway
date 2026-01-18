@@ -23,7 +23,7 @@ fn main() -> std::io::Result<()> {
     let conn = Connection::connect()?;
 
     let wl_display = conn.display();
-    let wl_registry = wl_display.get_registry(conn.writer());
+    let wl_registry = wl_display.get_registry(conn);
 
     let mut callbacks: Vec<(u32, Callback)> = Vec::with_capacity(16);
 
@@ -109,15 +109,15 @@ struct Xkb {
 impl App {
     fn on_wlseat(&mut self, conn: &Connection, event: WlEvent) {
         let wl_seat = unsafe { self.wl_seat.as_ref().unwrap_unchecked() };
-        match wl_seat.parse_event(conn.reader(), event) {
+        match wl_seat.parse_event(conn, event) {
             wl_seat::Event::Capabilities { capabilities } => {
                 if capabilities & wl_seat::CAPABILITY_POINTER > 0 {
-                    let wl_pointer = wl_seat.get_pointer(conn.writer());
+                    let wl_pointer = wl_seat.get_pointer(conn);
                     self.callbacks.push((wl_pointer.id(), Self::on_wlpointer));
                     self.wl_pointer = Some(wl_pointer);
                 }
                 if capabilities & wl_seat::CAPABILITY_KEYBOARD > 0 {
-                    let wl_keyboard = wl_seat.get_keyboard(conn.writer());
+                    let wl_keyboard = wl_seat.get_keyboard(conn);
                     self.callbacks.push((wl_keyboard.id(), Self::on_wlkeyboard));
                     self.wl_keyboard = Some(wl_keyboard);
                 }
@@ -128,7 +128,7 @@ impl App {
 
     fn on_wlkeyboard(&mut self, conn: &Connection, event: WlEvent) {
         let wl_keyboard = unsafe { self.wl_keyboard.as_ref().unwrap_unchecked() };
-        match wl_keyboard.parse_event(conn.reader(), event) {
+        match wl_keyboard.parse_event(conn, event) {
             wl_keyboard::Event::Keymap { fd, size, .. } => unsafe {
                 let p_keymap = libc::mmap(
                     core::ptr::null_mut(),
@@ -214,13 +214,13 @@ impl App {
 
     fn on_wlpointer(&mut self, conn: &Connection, event: WlEvent) {
         let wl_pointer = unsafe { self.wl_pointer.as_ref().unwrap_unchecked() };
-        match wl_pointer.parse_event(conn.reader(), event) {
+        match wl_pointer.parse_event(conn, event) {
             _ => {}
         }
     }
 
     fn on_wldisplay(&mut self, conn: &Connection, event: WlEvent) {
-        match self.wl_display.parse_event(conn.reader(), event) {
+        match self.wl_display.parse_event(conn, event) {
             wl_display::Event::Error {
                 object_id,
                 code,
@@ -242,7 +242,7 @@ impl App {
         // let Some(wl_registry) = self.wl_registry.as_ref() else {
         //     return; // this should never be reached
         // };
-        match wl_registry.parse_event(conn.reader(), event) {
+        match wl_registry.parse_event(conn, event) {
             wl_registry::Event::Global {
                 name,
                 interface,
@@ -250,31 +250,31 @@ impl App {
             } => match interface {
                 "wp_viewporter" => {
                     self.viewporter =
-                        Some(wl_registry.bind(conn.writer(), name, interface, version));
+                        Some(wl_registry.bind(conn, name, interface, version));
                 }
                 "wl_shm" => {
                     let wl_shm: wl_shm::WlShm =
-                        wl_registry.bind(conn.writer(), name, interface, version);
+                        wl_registry.bind(conn, name, interface, version);
                     self.wl_shm = Some(wl_shm);
                     self.init_shm(conn);
                 }
                 "wl_seat" => {
                     let wl_seat: wl_seat::WlSeat =
-                        wl_registry.bind(conn.writer(), name, interface, version);
+                        wl_registry.bind(conn, name, interface, version);
                     self.callbacks.push((wl_seat.id(), Self::on_wlseat));
                     self.wl_seat = Some(wl_seat);
                 }
                 "wl_compositor" => {
                     let wl_compositor: wl_compositor::WlCompositor =
-                        wl_registry.bind(conn.writer(), name, interface, version);
-                    let wl_surface = wl_compositor.create_surface(conn.writer());
+                        wl_registry.bind(conn, name, interface, version);
+                    let wl_surface = wl_compositor.create_surface(conn);
 
                     self.callbacks.push((wl_surface.id(), Self::on_wlsurface));
                     self.wl_surface = Some(wl_surface);
                 }
                 "xdg_wm_base" => {
                     let xdg_wm_base: XdgWmBase =
-                        wl_registry.bind(conn.writer(), name, interface, version);
+                        wl_registry.bind(conn, name, interface, version);
                     self.callbacks.push((xdg_wm_base.id(), Self::on_xdgwmbase));
 
                     self.xdg_wm_base = Some(xdg_wm_base);
@@ -293,23 +293,23 @@ impl App {
         // let Some(xdg_surface) = self.xdg_surface.as_ref() else {
         //     return;
         // };
-        match xdg_surface.parse_event(conn.reader(), event) {
+        match xdg_surface.parse_event(conn, event) {
             xdg_surface::Event::Configure { serial } => {
-                xdg_surface.ack_configure(conn.writer(), serial);
+                xdg_surface.ack_configure(conn, serial);
 
                 let wl_surface = self.wl_surface.as_ref().unwrap();
                 if let Some(ref wl_buffer) = self.wl_buffer
                     && !self.configured
                 {
-                    wl_surface.set_input_region(conn.writer(), None);
-                    wl_surface.attach(conn.writer(), Some(wl_buffer), 0, 0);
-                    wl_surface.commit(conn.writer());
+                    wl_surface.set_input_region(conn, None);
+                    wl_surface.attach(conn, Some(wl_buffer), 0, 0);
+                    wl_surface.commit(conn);
                     self.configured = true;
                 }
 
                 if self.window_size_changed {
                     xdg_surface.set_window_geometry(
-                        conn.writer(),
+                        conn,
                         0,
                         0,
                         self.window_width,
@@ -317,13 +317,13 @@ impl App {
                     );
                     if let Some(ref viewport) = self.viewport {
                         viewport.set_destination(
-                            conn.writer(),
+                            conn,
                             self.window_width,
                             self.window_height,
                         );
                     }
-                    wl_surface.damage_buffer(conn.writer(), 0, 0, self.width, self.height);
-                    wl_surface.commit(conn.writer());
+                    wl_surface.damage_buffer(conn, 0, 0, self.width, self.height);
+                    wl_surface.commit(conn);
                     self.window_size_changed = false;
                 }
             }
@@ -334,23 +334,23 @@ impl App {
         let Some(wl_surface) = self.wl_surface.as_ref() else {
             return;
         };
-        match wl_surface.parse_event(conn.reader(), event) {
+        match wl_surface.parse_event(conn, event) {
             _ => {}
         }
     }
 
     fn on_xdgwmbase(&mut self, conn: &Connection, event: WlEvent<'_>) {
         let xdg_wm_base = unsafe { self.xdg_wm_base.as_ref().unwrap_unchecked() };
-        match xdg_wm_base.parse_event(conn.reader(), event) {
+        match xdg_wm_base.parse_event(conn, event) {
             xdg_wm_base::Event::Ping { serial } => {
-                xdg_wm_base.pong(conn.writer(), serial);
+                xdg_wm_base.pong(conn, serial);
             }
         }
     }
 
     fn on_xdgtoplevel(&mut self, conn: &Connection, event: WlEvent<'_>) {
         let xdg_toplevel = unsafe { self.xdg_toplevel.as_ref().unwrap_unchecked() };
-        match xdg_toplevel.parse_event(conn.reader(), event) {
+        match xdg_toplevel.parse_event(conn, event) {
             xdg_toplevel::Event::Configure { width, height, .. } => {
                 if width != 0 && height != 0 {
                     if self.window_width != width || self.window_height != height {
@@ -372,7 +372,7 @@ impl App {
         let Some(wl_buffer) = self.wl_buffer.as_ref() else {
             return;
         };
-        match wl_buffer.parse_event(conn.reader(), event) {
+        match wl_buffer.parse_event(conn, event) {
             wl_buffer::Event::Release => {}
         }
     }
@@ -381,24 +381,24 @@ impl App {
         let wl_surface = unsafe { self.wl_surface.as_ref().unwrap_unchecked() };
         let xdg_wm_base = unsafe { self.xdg_wm_base.as_ref().unwrap_unchecked() };
 
-        let xdg_surface = xdg_wm_base.get_xdg_surface(conn.writer(), wl_surface);
+        let xdg_surface = xdg_wm_base.get_xdg_surface(conn, wl_surface);
         self.callbacks.push((xdg_surface.id(), Self::on_xdgsurface));
 
-        let xdg_toplevel = xdg_surface.get_toplevel(conn.writer());
+        let xdg_toplevel = xdg_surface.get_toplevel(conn);
         self.callbacks
             .push((xdg_toplevel.id(), Self::on_xdgtoplevel));
 
-        xdg_toplevel.set_title(conn.writer(), "Hola bola");
-        xdg_toplevel.set_app_id(conn.writer(), "com.github.evillary");
+        xdg_toplevel.set_title(conn, "Hola bola");
+        xdg_toplevel.set_app_id(conn, "com.github.evillary");
 
         if let Some(ref viewporter) = self.viewporter {
-            let viewport = viewporter.get_viewport(conn.writer(), wl_surface);
-            viewport.set_destination(conn.writer(), self.width, self.height);
+            let viewport = viewporter.get_viewport(conn, wl_surface);
+            viewport.set_destination(conn, self.width, self.height);
             self.viewport = Some(viewport);
         }
 
-        xdg_surface.set_window_geometry(conn.writer(), 0, 0, self.width, self.height);
-        wl_surface.commit(conn.writer());
+        xdg_surface.set_window_geometry(conn, 0, 0, self.width, self.height);
+        wl_surface.commit(conn);
 
         self.xdg_toplevel = Some(xdg_toplevel);
         self.xdg_surface = Some(xdg_surface);
@@ -451,14 +451,14 @@ impl App {
         self.draw(conn, c"Press anything");
 
         let wl_shm = self.wl_shm.as_ref().unwrap();
-        let wl_shm_pool = wl_shm.create_pool(conn.writer(), self.shm_fd, self.shm_pool_size);
+        let wl_shm_pool = wl_shm.create_pool(conn, self.shm_fd, self.shm_pool_size);
         let wl_buffer =
-            wl_shm_pool.create_buffer(conn.writer(), 0, self.width, self.height, self.stride, 1);
+            wl_shm_pool.create_buffer(conn, 0, self.width, self.height, self.stride, 1);
         // unsafe {
         //     libc::close(self.shm_fd);
         //     self.shm_fd = 0;
         // }
-        // wl_shm_pool.destroy(conn.writer());
+        // wl_shm_pool.destroy(conn);
 
         self.callbacks.push((wl_buffer.id(), Self::on_wlbuffer));
         self.wl_shm_pool = Some(wl_shm_pool);
@@ -537,9 +537,9 @@ impl App {
             return;
         };
 
-        wl_surface.attach(conn.writer(), Some(wl_buffer), 0, 0);
-        wl_surface.damage_buffer(conn.writer(), 0, 0, self.width, self.height);
-        wl_surface.commit(conn.writer());
+        wl_surface.attach(conn, Some(wl_buffer), 0, 0);
+        wl_surface.damage_buffer(conn, 0, 0, self.width, self.height);
+        wl_surface.commit(conn);
     }
 
     fn cleanup(&self, conn: &Connection) {
@@ -562,35 +562,35 @@ impl App {
         }
 
         if let Some(ref o) = self.wl_pointer {
-            o.release(conn.writer());
+            o.release(conn);
         }
 
         if let Some(ref o) = self.wl_buffer {
-            o.destroy(conn.writer());
+            o.destroy(conn);
         }
 
         if let Some(ref o) = self.xdg_toplevel {
-            o.destroy(conn.writer());
+            o.destroy(conn);
         }
 
         if let Some(ref o) = self.viewport {
-            o.destroy(conn.writer());
+            o.destroy(conn);
         }
 
         if let Some(ref o) = self.viewporter {
-            o.destroy(conn.writer());
+            o.destroy(conn);
         }
 
         if let Some(ref o) = self.xdg_surface {
-            o.destroy(conn.writer());
+            o.destroy(conn);
         }
 
         if let Some(ref o) = self.xdg_wm_base {
-            o.destroy(conn.writer());
+            o.destroy(conn);
         }
 
         if let Some(ref o) = self.wl_surface {
-            o.destroy(conn.writer());
+            o.destroy(conn);
         }
     }
 }
