@@ -59,13 +59,15 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let object_name = Ident::new(&o.name.snake_to_pascal(), Span::call_site());
         let events_enum = o.events.iter().map(|e| {
             let ev_idnt = Ident::new(&e.name.snake_to_pascal(), Span::call_site());
-            quote!{
+            quote! {
                 #ev_idnt
             }
         });
 
         let reqs = o.requests.iter().enumerate().map(|(i, r)| {
-            let req_idnt = if r.name != "move" { Ident::new(&r.name, Span::call_site()) } else {
+            let req_idnt = if r.name != "move" {
+                Ident::new(&r.name, Span::call_site())
+            } else {
                 format_ident!("_{}", r.name)
             };
             let mut fn_body = Vec::new();
@@ -74,16 +76,17 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
             let mut args = Vec::new();
             let mut log_msg = format!("{{}}.{}(", r.name);
             let opcode = i as u16;
-            let (mut return_ty, mut return_stmnt)  = (quote! { () }, quote! {});
+            let (mut return_ty, mut return_stmnt) = (quote! { () }, quote! {});
+            let mut new_ids: Vec<TokenStream> = Vec::new();
             for arg in &r.args {
                 let arg_idnt = Ident::new(&arg.name, Span::call_site());
                 match &arg.arg_type {
                     parser::ArgType::Int => {
                         size += 4;
-                        params.push(quote!{
+                        params.push(quote! {
                             #arg_idnt: i32
                         });
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             msg.write_i32(#arg_idnt);
                         });
                         args.push(quote! {
@@ -93,10 +96,10 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     },
                     parser::ArgType::Uint => {
                         size += 4;
-                        params.push(quote!{
+                        params.push(quote! {
                             #arg_idnt: u32
                         });
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             msg.write_u32(#arg_idnt);
                         });
                         args.push(quote! {
@@ -106,10 +109,10 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     },
                     parser::ArgType::Enum(_) => {
                         size += 4;
-                        params.push(quote!{
+                        params.push(quote! {
                             #arg_idnt: u32
                         });
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             msg.write_u32(#arg_idnt);
                         });
                         args.push(quote! {
@@ -119,10 +122,10 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     },
                     parser::ArgType::Fixed => {
                         size += 4;
-                        params.push(quote!{
+                        params.push(quote! {
                             #arg_idnt: f32
                         });
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             msg.write_fixed(#arg_idnt);
                         });
                         args.push(quote! {
@@ -132,10 +135,10 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     },
                     parser::ArgType::String { allow_null } => {
                         size += 54;
-                        params.push(quote!{
+                        params.push(quote! {
                             #arg_idnt: &str
                         });
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             msg.write_string(#arg_idnt);
                         });
                         args.push(quote! {
@@ -152,18 +155,18 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             params.push(quote! {
                                 #arg_idnt: Option<&#mod_idnt::#iface_idnt>
                             });
-                            fn_body.push(quote!{
+                            fn_body.push(quote! {
                                 let #arg_id = #arg_idnt.map_or(0, |o| o.id());
                             })
                         } else {
                             params.push(quote! {
                                 #arg_idnt: &#mod_idnt::#iface_idnt
                             });
-                            fn_body.push(quote!{
+                            fn_body.push(quote! {
                                 let #arg_id = #arg_idnt.id();
                             })
                         }
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             msg.write_u32(#arg_id);
                         });
                         args.push(quote! {
@@ -182,11 +185,14 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                         return_ty = quote! {
                             #iface_mod::#new_type_ob
                         };
-                        fn_body.push(quote!{
-                            let new_id = writer.new_id();
+                        new_ids.push(quote!{
+                            let new_id = conn.new_id();
                             let #new_idnt: #return_ty = Object::from_id(new_id);
                             msg.write_u32(new_id);
                         });
+                        // fn_body.push(quote! {
+                        //     msg.write_u32(new_id);
+                        // });
                         args.push(quote! {
                             #new_idnt
                         });
@@ -194,10 +200,10 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     },
                     parser::ArgType::Array => {
                         size += 28;
-                        params.push(quote!{
+                        params.push(quote! {
                             #arg_idnt: &[u32]
                         });
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             msg.write_array(#arg_idnt);
                         });
                         args.push(quote! {
@@ -206,10 +212,10 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                         log_msg.push_str("{:?}, ");
                     },
                     parser::ArgType::Fd => {
-                        params.push(quote!{
+                        params.push(quote! {
                             #arg_idnt: i32
                         });
-                        fn_body.push(quote!{
+                        fn_body.push(quote! {
                             writer.add_fd(#arg_idnt);
                         });
                         args.push(quote! {
@@ -234,10 +240,11 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 }
                 format!("{})", &msg[..end])
             };
-            quote!{
-                pub fn #req_idnt<S>(&self, conn: &Connection<S>, #(#params,)*) -> #return_ty {
-                    let writer = conn.writer();
+            quote! {
+                pub fn #req_idnt<S>(&self, conn: &mut Connection<S>, #(#params,)*) -> #return_ty {
                     let mut msg = Message::<#size>::new(self.id, #opcode);
+                    #(#new_ids)*
+                    let writer = conn.writer();
                     #(#fn_body)*
                     writer.write_request(msg.data());
                     {
@@ -259,13 +266,13 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
             let mut ev_fields: Vec<TokenStream> = Vec::new();
             let mut log_msg = format!("==> {{}}.{}(", ev.name);
             let mut args = Vec::new();
-            let ty = quote!{ u32 };
+            let ty = quote! { u32 };
             if ev.args.is_empty() {
-                ev_variants.push(quote!{
+                ev_variants.push(quote! {
                     #ev_idnt
                 });
                 log_msg.push_str(")");
-                variant_parse.push(quote!{
+                variant_parse.push(quote! {
                     {
                         log!(WAYLAND, #log_msg, self, #(#args,)*);
                     }
@@ -277,7 +284,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     let field_idnt = Ident::new(&arg.name, Span::call_site());
                     let field_type = match &arg.arg_type {
                         parser::ArgType::Int => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = parser.get_i32();
                             });
                             args.push(quote! {
@@ -287,7 +294,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             quote! { i32 }
                         },
                         parser::ArgType::Uint => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = parser.get_u32();
                             });
                             args.push(quote! {
@@ -297,7 +304,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             quote! { u32 }
                         },
                         parser::ArgType::Enum(_) => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = parser.get_u32();
                             });
                             args.push(quote! {
@@ -307,7 +314,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             quote! { u32 }
                         },
                         parser::ArgType::Fixed => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = parser.get_fixed();
                             });
                             args.push(quote! {
@@ -317,7 +324,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             quote! { f32 }
                         },
                         parser::ArgType::String { allow_null } => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = parser.get_string();
                             });
                             args.push(quote! {
@@ -335,7 +342,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             });
                             log_msg.push_str("{:?}, ");
                             if *allow_null {
-                                variant_parse.push(quote!{
+                                variant_parse.push(quote! {
                                     let #field_idnt = {
                                         let id = parser.get_u32();
                                         if id == 0 {
@@ -347,14 +354,14 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                                 });
                                 quote! { Option<#iface_mod::#iface_obj> }
                             } else {
-                                variant_parse.push(quote!{
+                                variant_parse.push(quote! {
                                     let #field_idnt = Object::from_id(parser.get_u32());
                                 });
                                 quote! { #iface_mod::#iface_obj }
                             }
                         },
                         parser::ArgType::NewId { iface } => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = parser.get_u32();
                             });
                             args.push(quote! {
@@ -364,7 +371,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             quote! { u32 }
                         },
                         parser::ArgType::Array => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = parser.get_array();
                             });
                             args.push(quote! {
@@ -375,7 +382,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             quote! { &'a [u32] }
                         },
                         parser::ArgType::Fd => {
-                            variant_parse.push(quote!{
+                            variant_parse.push(quote! {
                                 let #field_idnt = reader.get_fd().unwrap();
                             });
                             args.push(quote! {
@@ -388,7 +395,7 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     fields.push(quote! {
                         #field_idnt
                     });
-                    ev_fields.push(quote!{
+                    ev_fields.push(quote! {
                         #field_idnt: #field_type
                     });
                 }
@@ -407,22 +414,26 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     Self::Event::#ev_idnt { #(#fields,)* }
                 });
 
-                ev_variants.push(quote!{
+                ev_variants.push(quote! {
                     #ev_idnt {
                         #(#ev_fields,)*
                     }
                 });
             }
-            ev_parse.push(quote!{
+            ev_parse.push(quote! {
                 #i => {
                     #(#variant_parse)*
                 }
             });
         }
 
-        let ev_lifetime = if ev_lifetime { quote! {<'a>} } else { quote! {} };
+        let ev_lifetime = if ev_lifetime {
+            quote! {<'a>}
+        } else {
+            quote! {}
+        };
 
-        let mut event_enum = quote!{
+        let mut event_enum = quote! {
             #[derive(Debug)]
             pub enum Event #ev_lifetime {
                  #(#ev_variants,)*
@@ -530,14 +541,13 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     fn interface(&self) -> &'static str {
                         Self::INTERFACE
                     }
-                    fn parse_event<'a, S>(&self, conn: &Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
+                    fn parse_event<'a, S>(&self, conn: &mut Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
                         let reader = conn.reader();
                         #parse_body
                     }
                 }
             }
         }
-
     });
 
     interfaces.collect::<TokenStream>().into()

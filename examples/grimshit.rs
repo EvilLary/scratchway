@@ -10,15 +10,14 @@ use scr_protocols::wlr_screencopy_unstable_v1::{
 };
 
 fn main() -> std::io::Result<()> {
-    let conn = Connection::connect()?;
+    let mut conn = Connection::connect()?;
     let wl_display = conn.display();
-    let wl_registry = wl_display.get_registry(conn.writer());
+    let wl_registry = wl_display.get_registry(&mut conn);
+
+    conn.add_callback(&wl_registry, GrimShit::on_wlregistry);
+    conn.add_callback(&wl_display, GrimShit::on_wldisplay);
 
     let mut state = GrimShit {
-        cbs: vec![
-            (wl_display.id(), GrimShit::on_wldisplay),
-            (wl_registry.id(), GrimShit::on_wlregistry),
-        ],
         shm_data: ShmData::default(),
         screencopy_mgr: None,
         screencopy_frame: None,
@@ -57,13 +56,13 @@ fn main() -> std::io::Result<()> {
     let output = state.outputs.first().unwrap();
     let screencopy_mgr = state.screencopy_mgr.as_ref().unwrap();
 
-    let screencopy_frame = screencopy_mgr.capture_output(conn.writer(), 0, &output.wl_output);
-    state.add_cb(screencopy_frame.id(), GrimShit::on_screencopyframe);
+    let screencopy_frame = screencopy_mgr.capture_output(&mut conn, 0, &output.wl_output);
+    conn.add_callback(&screencopy_frame, GrimShit::on_screencopyframe);
     state.screencopy_frame = Some(screencopy_frame);
     // conn.roundtrip(&mut state)?;
 
     while !state.exit {
-        conn.dispatch_events(&mut state)?;
+        conn.blocking_dispatch(&mut state)?;
     }
 
     Ok(())
@@ -76,10 +75,9 @@ struct Output {
     height: i32,
     mode: u32,
     wl_output: wl_output::WlOutput,
-    name: u32,
+    wl_name: u32,
 }
 
-type Callback = fn(&mut GrimShit, &Connection, WlEvent<'_>);
 #[derive(Debug)]
 struct GrimShit {
     wl_registry: wl_registry::WlRegistry,
@@ -96,8 +94,6 @@ struct GrimShit {
 
     wl_buffer: Option<wl_buffer::WlBuffer>,
     outputs: Vec<Output>,
-
-    cbs: Vec<(u32, Callback)>,
 
     shm_data: ShmData,
     exit: bool,
@@ -122,11 +118,11 @@ impl Drop for ShmData {
 }
 
 impl GrimShit {
-    fn on_wldisplay(&mut self, conn: &Connection, event: WlEvent) {}
+    fn on_wldisplay(&mut self, conn: &mut Connection<Self>, event: WlEvent) {}
 
-    fn on_screencopyframe(&mut self, conn: &Connection, event: WlEvent) {
+    fn on_screencopyframe(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let frame = self.screencopy_frame.as_ref().expect("fsdfl");
-        match frame.parse_event(conn.reader(), event) {
+        match frame.parse_event(conn, &event) {
             zwlr_screencopy_frame_v1::Event::Buffer {
                 format,
                 width,
@@ -181,20 +177,20 @@ impl GrimShit {
 
                 let wl_shm = self.wl_shm.as_ref().expect("fsdjkf");
 
-                let wl_shm_pool = wl_shm.create_pool(conn.writer(), shm_fd, shm_pool_size as i32);
+                let wl_shm_pool = wl_shm.create_pool(conn, shm_fd, shm_pool_size as i32);
 
                 let wl_buffer = wl_shm_pool.create_buffer(
-                    conn.writer(),
+                    conn,
                     0,
                     self.width as i32,
                     self.height as i32,
                     self.stride as i32,
                     1,
                 );
-                wl_shm_pool.destroy(conn.writer());
+                wl_shm_pool.destroy(conn);
 
                 // self.callbacks.push((wl_buffer.id(), Self::on_wlbuffer));
-                frame.copy(conn.writer(), &wl_buffer);
+                frame.copy(conn, &wl_buffer);
                 self.wl_buffer = Some(wl_buffer);
 
                 self.shm_data.data = shm_pool as *mut u8;
@@ -248,13 +244,13 @@ impl GrimShit {
         file.flush()
     }
 
-    fn on_wloutput(&mut self, conn: &Connection, event: WlEvent) {
+    fn on_wloutput(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let output = self
             .outputs
             .iter_mut()
             .find(|o| event.header.id == o.wl_output.id())
             .expect("Couldn't get output for recieved output event?");
-        match output.wl_output.parse_event(conn.reader(), event) {
+        match output.wl_output.parse_event(conn, &event) {
             wl_output::Event::Mode {
                 flags,
                 width,
@@ -273,23 +269,23 @@ impl GrimShit {
         }
     }
 
-    fn on_wlshm(&mut self, conn: &Connection, event: WlEvent) {
+    fn on_wlshm(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let wl_shm = self.wl_shm.as_ref().expect("hfdosdf");
-        match wl_shm.parse_event(conn.reader(), event) {
+        match wl_shm.parse_event(conn, &event) {
             _ => {}
         }
     }
 
     #[rustfmt::skip]
-    fn on_wlregistry(&mut self, conn: &Connection, event: WlEvent) {
-        match self.wl_registry.parse_event(conn.reader(), event) {
+    fn on_wlregistry(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
+        match self.wl_registry.parse_event(conn, &event) {
             wl_registry::Event::Global { name, interface, version } => {
                 match interface {
                     wl_output::WlOutput::INTERFACE => {
-                        let wl_output: wl_output::WlOutput = self.wl_registry.bind(conn.writer(), name, interface, version);
-                        self.add_cb(wl_output.id(), Self::on_wloutput);
+                        let wl_output: wl_output::WlOutput = self.wl_registry.bind(conn, name, interface, version);
+                        conn.add_callback(&wl_output, Self::on_wloutput);
                         self.outputs.push(Output {
-                            name,
+                            wl_name: name,
                             height: 0,
                             width: 0,
                             wl_output,
@@ -299,12 +295,12 @@ impl GrimShit {
 
                     }
                     ZwlrScreencopyManagerV1::INTERFACE => {
-                        let screencopy_mgr = self.wl_registry.bind(conn.writer(), name, interface, version);
+                        let screencopy_mgr = self.wl_registry.bind(conn, name, interface, version);
                         self.screencopy_mgr = Some(screencopy_mgr)
                     }
                     wl_shm::WlShm::INTERFACE => {
-                        let wl_shm: wl_shm::WlShm = self.wl_registry.bind(conn.writer(), name, interface, version);
-                        self.add_cb(wl_shm.id(), Self::on_wlshm);
+                        let wl_shm: wl_shm::WlShm = self.wl_registry.bind(conn, name, interface, version);
+                        conn.add_callback(&wl_shm, Self::on_wlshm);
                         self.wl_shm = Some(wl_shm)
                     }
                     _ => {}
@@ -313,25 +309,6 @@ impl GrimShit {
             wl_registry::Event::GlobalRemove { name } => {
 
             },
-        }
-    }
-
-    fn add_cb(&mut self, id: u32, cb: Callback) {
-        self.cbs.push((id, cb));
-    }
-}
-
-impl State for GrimShit {
-    fn handle_event(&mut self, conn: &Connection, event: WlEvent<'_>) {
-        if let Some((_, cb)) = self.cbs.iter().find(|(id, _)| *id == event.header.id) {
-            cb(self, conn, event)
-        } else {
-            scratchway::log!(
-                ERR,
-                " Unhandled event for id: {}, opcode: {}",
-                event.header.id,
-                event.header.opcode
-            )
         }
     }
 }

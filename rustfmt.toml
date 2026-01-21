@@ -1,5 +1,13 @@
 # edition="2021"
 style_edition = "2024"
-fn_args_layout="Compressed"
 struct_lit_single_line=false
+fn_args_layout="Compressed"
+# fn_call_width="Compressed"
+force_multiline_blocks=true
+# format_strings=true
+match_block_trailing_comma=true
+# struct_variant_width=135
+# wrap_comments=true
+max_width=110
+# struct_lit_single_line=false
 struct_field_align_threshold=20

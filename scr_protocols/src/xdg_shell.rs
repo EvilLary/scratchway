@@ -1,7 +1,5 @@
-#![allow(unused_mut, unused)]
-
+#![allow(unused_mut)]
 use scratchway::wayland::*;
-use scratchway::connection::{Reader, WaylandBuffer, Writer};
 use scratchway::events::*;
 use scratchway::prelude::*;
 use scratchway::log;

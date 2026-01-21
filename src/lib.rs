@@ -5,7 +5,7 @@ pub mod events;
 pub mod wayland;
 
 pub mod prelude {
-    pub use crate::connection::{Connection, Object, State};
+    pub use crate::connection::{Connection, Object};
     pub use crate::events::WlEvent;
 }
 

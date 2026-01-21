@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
     let target_output = std::env::args().skip(1).next();
 
     let wl_display = conn.display();
-    let wl_registry = wl_display.get_registry(&conn);
+    let wl_registry = wl_display.get_registry(&mut conn);
 
     conn.add_callback(&wl_registry, WaylandState::on_registry_event);
     conn.add_callback(&wl_display, WaylandState::on_wldisplay_event);
@@ -44,7 +44,7 @@ fn main() -> std::io::Result<()> {
     state.init_layer(&mut conn, target_output);
 
     while !state.exit {
-        conn.dispatch_events(&mut state)?;
+        conn.blocking_dispatch(&mut state)?;
     }
 
     Ok(())
@@ -87,7 +87,7 @@ impl WaylandState {
         let wl_compositor = unsafe { self.wl_compositor.as_ref().unwrap_unchecked() };
 
         let wl_surface = wl_compositor.create_surface(conn);
-        conn.add_callback(&wl_surface, Self::on_wlsurface_event);
+        wl_surface.set_callback(conn, Self::on_wlsurface_event);
 
         let wl_buffer = unsafe { self.wl_buffer.as_ref().unwrap_unchecked() };
         let wlr_layer_shell = unsafe { self.wlr_layer_shell.as_ref().unwrap_unchecked() };
@@ -110,9 +110,8 @@ impl WaylandState {
             std::process::exit(1);
         };
 
-        let layer_surface =
-            wlr_layer_shell.get_layer_surface(conn, &wl_surface, None, 2, "crosshair");
-        conn.add_callback(&layer_surface, Self::on_layersurface_event, );
+        let layer_surface = wlr_layer_shell.get_layer_surface(conn, &wl_surface, None, 2, "crosshair");
+        layer_surface.set_callback(conn, Self::on_layersurface_event);
 
         // if let Some(ref viewporter) = self.viewporter {
         //     let viewport = viewporter.get_viewport(conn, &wl_surface);
@@ -125,10 +124,8 @@ impl WaylandState {
             | zwlr_layer_surface_v1::ANCHOR_LEFT
             | zwlr_layer_surface_v1::ANCHOR_TOP;
 
-        layer_surface.set_keyboard_interactivity(
-            conn,
-            zwlr_layer_surface_v1::KeyboardInteractivity::None as u32,
-        );
+        layer_surface
+            .set_keyboard_interactivity(conn, zwlr_layer_surface_v1::KeyboardInteractivity::None as u32);
         layer_surface.set_exclusive_zone(conn, 30);
         layer_surface.set_anchor(conn, anchor);
         layer_surface.set_margin(conn, 0, 0, 0, 0);
@@ -149,10 +146,10 @@ impl WaylandState {
             } => {
                 eprintln!("Protocol error: code {code} from object {object_id}, {message}");
                 self.exit = true;
-            }
+            },
             wl_display::Event::DeleteId { id } => {
                 conn.remove_callback(id);
-            }
+            },
         }
     }
 
@@ -169,18 +166,17 @@ impl WaylandState {
                 "wl_compositor" => {
                     let wl_compositor = wl_registry.bind(conn, name, interface, version);
                     self.wl_compositor = Some(wl_compositor);
-                }
+                },
                 "wp_viewporter" => {
                     // let viewporter = wl_registry.bind(&conn, name, interface, version);
                     // self.viewporter = Some(viewporter);
-                }
+                },
                 "zwlr_layer_shell_v1" => {
-                    let wlr_layer_shell = wl_registry.bind(&conn, name, interface, version);
+                    let wlr_layer_shell = wl_registry.bind(conn, name, interface, version);
                     self.wlr_layer_shell = Some(wlr_layer_shell);
-                }
+                },
                 "wp_single_pixel_buffer_manager_v1" => {
-                    let spm: WpSinglePixelBufferManagerV1 =
-                        wl_registry.bind(&conn, name, interface, version);
+                    let spm: WpSinglePixelBufferManagerV1 = wl_registry.bind(conn, name, interface, version);
                     let wl_buffer = spm.create_u32_rgba_buffer(
                         conn,
                         (u32::MAX / 255) * 170,
@@ -191,10 +187,9 @@ impl WaylandState {
                     conn.add_callback(&wl_buffer, Self::on_wlbuffer_event);
                     self.wl_buffer = Some(wl_buffer);
                     spm.destroy(conn);
-                }
+                },
                 "wl_output" => {
-                    let wl_output: wl_output::WlOutput =
-                        wl_registry.bind(&conn, name, interface, version);
+                    let wl_output: wl_output::WlOutput = wl_registry.bind(conn, name, interface, version);
                     conn.add_callback(&wl_output, Self::on_output_event);
                     self.outputs.push(Output {
                         wl_output,
@@ -204,8 +199,8 @@ impl WaylandState {
                         height: 0,
                         ready: false,
                     });
-                }
-                _ => {}
+                },
+                _ => {},
             },
             wl_registry::Event::GlobalRemove { name } => todo!(),
         }
@@ -236,10 +231,10 @@ impl WaylandState {
                     wl_surface.commit(conn);
                     self.configured = true;
                 }
-            }
+            },
             zwlr_layer_surface_v1::Event::Closed => {
                 self.exit = true;
-            }
+            },
         }
     }
 
@@ -248,7 +243,7 @@ impl WaylandState {
             return;
         };
         match wl_surface.parse_event(conn, &event) {
-            _ => {}
+            _ => {},
         }
     }
 
@@ -257,7 +252,7 @@ impl WaylandState {
             return; // this should never be reached
         };
         match wl_buffer.parse_event(conn, &event) {
-            wl_buffer::Event::Release => {}
+            wl_buffer::Event::Release => {},
         }
     }
 
@@ -279,7 +274,7 @@ impl WaylandState {
                 make,
                 model,
                 transform,
-            } => {}
+            } => {},
             wl_output::Event::Mode {
                 flags,
                 width,
@@ -288,13 +283,13 @@ impl WaylandState {
             } => {
                 output.width = width;
                 output.height = height;
-            }
+            },
             wl_output::Event::Done => {
                 output.ready = true;
-            }
-            wl_output::Event::Scale { factor } => {}
+            },
+            wl_output::Event::Scale { factor } => {},
             wl_output::Event::Name { name } => output.port = name.into(),
-            wl_output::Event::Description { description } => {}
+            wl_output::Event::Description { description } => {},
         }
     }
 }

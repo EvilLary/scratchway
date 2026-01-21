@@ -6,46 +6,45 @@ use scratchway::wayland::*;
 fn main() -> std::io::Result<()> {
     let mut conn = Connection::connect()?;
     let display = conn.display();
-    let registry = display.get_registry(&conn);
+    let registry = display.get_registry(&mut conn);
 
-    let mut app = App { registry };
+    registry.set_callback(
+        &mut conn,
+        |state: &mut (), conn: &mut Connection<()>, event: WlEvent| {
+            let registry = wl_registry::WlRegistry::from_id(event.header.id);
+            let event = registry.parse_event(conn, &event);
+            match event {
+                wl_registry::Event::Global {
+                    interface,
+                    version,
+                    name,
+                } => println!("Global ==> name: {:02}, {}", name, interface),
+                wl_registry::Event::GlobalRemove { name } => {
+                    println!("GlobalRemove ==> name: {}", name);
+                },
+            }
+        },
+    );
 
-    conn.add_callback(&app.registry, App::on_wlregistry);
-    conn.add_callback(&display, App::on_wldisplay);
+    display.set_callback(
+        &mut conn,
+        |state: &mut (), conn: &mut Connection<()>, event: WlEvent| {
+            let event = conn.display().parse_event(conn, &event);
+            match event {
+                wl_display::Event::Error {
+                    object_id,
+                    code,
+                    message,
+                } => {},
+                wl_display::Event::DeleteId { id } => {},
+            }
+        },
+    );
 
-
-    conn.roundtrip(&mut app)?;
+    conn.roundtrip(&mut ())?;
 
     loop {
-        conn.dispatch_events(&mut app)?;
+        conn.blocking_dispatch(&mut ())?;
     }
-}
-
-struct App {
-    registry: wl_registry::WlRegistry,
-}
-
-impl App {
-    fn on_wlregistry(&mut self, conn: &mut Connection<Self>, event: scratchway::events::WlEvent) {
-        match self.registry.parse_event(conn, &event) {
-            wl_registry::Event::Global {
-                interface,
-                version,
-                name,
-            } => match interface {
-                _ => {
-                    println!("Global ==> name: {:02}, {}", name, interface);
-                }
-            },
-            wl_registry::Event::GlobalRemove { name } => {
-                println!("GlobalRemove ==> name: {}", name);
-            }
-        }
-    }
-    fn on_wldisplay(&mut self, conn: &mut Connection<Self>, event: scratchway::events::WlEvent) {
-        match conn.display().parse_event(conn, &event) {
-            wl_display::Event::Error { object_id, code, message } => {},
-            wl_display::Event::DeleteId { id } => {},
-        }
-    }
+    Ok(())
 }

@@ -20,51 +20,30 @@ use clibs::xkbcommon;
 mod clibs;
 
 fn main() -> std::io::Result<()> {
-    let conn = Connection::connect()?;
+    let mut conn = Connection::connect()?;
 
     let wl_display = conn.display();
-    let wl_registry = wl_display.get_registry(conn);
+    let wl_registry = wl_display.get_registry(&mut conn);
 
-    let mut callbacks: Vec<(u32, Callback)> = Vec::with_capacity(16);
-
-    callbacks.push((wl_registry.id(), App::on_wlregistry));
-    callbacks.push((wl_display.id(), App::on_wldisplay));
+    conn.add_callback(&wl_registry, App::on_wlregistry);
+    conn.add_callback(&wl_display, App::on_wldisplay);
 
     let mut state = App {
         wl_display,
         wl_registry: Some(wl_registry),
-        callbacks,
         ..Default::default()
     };
 
     conn.roundtrip(&mut state)?;
     while !state.exit {
-        conn.dispatch_events(&mut state)?;
+        conn.blocking_dispatch(&mut state)?;
     }
 
     Ok(())
 }
 
-impl State for App {
-    fn handle_event(&mut self, conn: &Connection, event: WlEvent<'_>) {
-        if let Some((_, cb)) = self.callbacks.iter().find(|(id, _)| *id == event.header.id) {
-            cb(self, conn, event)
-        } else {
-            log!(
-                ERR,
-                "Unhandled event for id: {}, opcode: {}",
-                event.header.id,
-                event.header.opcode
-            )
-        }
-    }
-}
-
-type Callback = fn(&mut App, &Connection, WlEvent<'_>);
 #[derive(Debug, Default)]
 struct App {
-    callbacks: Vec<(u32, Callback)>,
-
     wl_display: wl_display::WlDisplay,
     wl_registry: Option<wl_registry::WlRegistry>,
     wl_seat: Option<wl_seat::WlSeat>,
@@ -107,28 +86,36 @@ struct Xkb {
 }
 
 impl App {
-    fn on_wlseat(&mut self, conn: &Connection, event: WlEvent) {
+    fn on_wlseat(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let wl_seat = unsafe { self.wl_seat.as_ref().unwrap_unchecked() };
-        match wl_seat.parse_event(conn, event) {
+        match wl_seat.parse_event(conn, &event) {
             wl_seat::Event::Capabilities { capabilities } => {
                 if capabilities & wl_seat::CAPABILITY_POINTER > 0 {
                     let wl_pointer = wl_seat.get_pointer(conn);
-                    self.callbacks.push((wl_pointer.id(), Self::on_wlpointer));
+                    wl_pointer.set_callback(
+                        conn,
+                        |state: &mut Self, conn: &mut Connection<Self>, event: WlEvent| {
+                            let wl_pointer = unsafe { state.wl_pointer.as_ref().unwrap_unchecked() };
+                            match wl_pointer.parse_event(conn, &event) {
+                                _ => {},
+                            }
+                        },
+                    );
                     self.wl_pointer = Some(wl_pointer);
                 }
                 if capabilities & wl_seat::CAPABILITY_KEYBOARD > 0 {
                     let wl_keyboard = wl_seat.get_keyboard(conn);
-                    self.callbacks.push((wl_keyboard.id(), Self::on_wlkeyboard));
+                    conn.add_callback(&wl_keyboard, Self::on_wlkeyboard);
                     self.wl_keyboard = Some(wl_keyboard);
                 }
-            }
-            wl_seat::Event::Name { .. } => {}
+            },
+            wl_seat::Event::Name { .. } => {},
         }
     }
 
-    fn on_wlkeyboard(&mut self, conn: &Connection, event: WlEvent) {
+    fn on_wlkeyboard(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let wl_keyboard = unsafe { self.wl_keyboard.as_ref().unwrap_unchecked() };
-        match wl_keyboard.parse_event(conn, event) {
+        match wl_keyboard.parse_event(conn, &event) {
             wl_keyboard::Event::Keymap { fd, size, .. } => unsafe {
                 let p_keymap = libc::mmap(
                     core::ptr::null_mut(),
@@ -171,15 +158,11 @@ impl App {
                         // );
                         if state == 1 {
                             let mut name = [0u8; 64];
-                            let len = xkbcommon::xkb_keysym_get_name(
-                                keysym,
-                                name.as_mut_ptr().cast(),
-                                name.len(),
-                            );
+                            let len =
+                                xkbcommon::xkb_keysym_get_name(keysym, name.as_mut_ptr().cast(), name.len());
                             self.draw(
                                 conn,
-                                c_str::CStr::from_bytes_with_nul(&name[..1 + len as usize])
-                                    .unwrap(),
+                                c_str::CStr::from_bytes_with_nul(&name[..1 + len as usize]).unwrap(),
                             );
                         }
                         xkbcommon::xkb_state_update_key(self.xkb.state, key + 8, state);
@@ -190,7 +173,7 @@ impl App {
                         // );
                     }
                 }
-            }
+            },
             wl_keyboard::Event::Modifiers {
                 mods_depressed,
                 mods_latched,
@@ -208,19 +191,12 @@ impl App {
                     0,
                 );
             },
-            _ => {}
+            _ => {},
         }
     }
 
-    fn on_wlpointer(&mut self, conn: &Connection, event: WlEvent) {
-        let wl_pointer = unsafe { self.wl_pointer.as_ref().unwrap_unchecked() };
-        match wl_pointer.parse_event(conn, event) {
-            _ => {}
-        }
-    }
-
-    fn on_wldisplay(&mut self, conn: &Connection, event: WlEvent) {
-        match self.wl_display.parse_event(conn, event) {
+    fn on_wldisplay(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
+        match self.wl_display.parse_event(conn, &event) {
             wl_display::Event::Error {
                 object_id,
                 code,
@@ -228,72 +204,61 @@ impl App {
             } => {
                 eprintln!("Protocol error: code {code} from object {object_id}, {message}");
                 self.exit = true;
-            }
-            wl_display::Event::DeleteId { id } => {
-                if let Some(pos) = self.callbacks.iter().position(|o| id == o.0) {
-                    let _ = self.callbacks.swap_remove(pos);
-                }
-            }
+            },
+            wl_display::Event::DeleteId { id } => {},
         }
     }
 
-    fn on_wlregistry(&mut self, conn: &Connection, event: WlEvent) {
+    fn on_wlregistry(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let wl_registry = unsafe { self.wl_registry.as_ref().unwrap_unchecked() };
-        // let Some(wl_registry) = self.wl_registry.as_ref() else {
-        //     return; // this should never be reached
-        // };
-        match wl_registry.parse_event(conn, event) {
+        match wl_registry.parse_event(conn, &event) {
             wl_registry::Event::Global {
                 name,
                 interface,
                 version,
             } => match interface {
                 "wp_viewporter" => {
-                    self.viewporter =
-                        Some(wl_registry.bind(conn, name, interface, version));
-                }
+                    self.viewporter = Some(wl_registry.bind(conn, name, interface, version));
+                },
                 "wl_shm" => {
-                    let wl_shm: wl_shm::WlShm =
-                        wl_registry.bind(conn, name, interface, version);
+                    let wl_shm: wl_shm::WlShm = wl_registry.bind(conn, name, interface, version);
                     self.wl_shm = Some(wl_shm);
                     self.init_shm(conn);
-                }
+                },
                 "wl_seat" => {
-                    let wl_seat: wl_seat::WlSeat =
-                        wl_registry.bind(conn, name, interface, version);
-                    self.callbacks.push((wl_seat.id(), Self::on_wlseat));
+                    let wl_seat: wl_seat::WlSeat = wl_registry.bind(conn, name, interface, version);
+                    conn.add_callback(&wl_seat, Self::on_wlseat);
                     self.wl_seat = Some(wl_seat);
-                }
+                },
                 "wl_compositor" => {
                     let wl_compositor: wl_compositor::WlCompositor =
                         wl_registry.bind(conn, name, interface, version);
                     let wl_surface = wl_compositor.create_surface(conn);
 
-                    self.callbacks.push((wl_surface.id(), Self::on_wlsurface));
+                    conn.add_callback(&wl_surface, Self::on_wlsurface);
                     self.wl_surface = Some(wl_surface);
-                }
+                },
                 "xdg_wm_base" => {
-                    let xdg_wm_base: XdgWmBase =
-                        wl_registry.bind(conn, name, interface, version);
-                    self.callbacks.push((xdg_wm_base.id(), Self::on_xdgwmbase));
+                    let xdg_wm_base: XdgWmBase = wl_registry.bind(conn, name, interface, version);
+                    conn.add_callback(&xdg_wm_base, Self::on_xdgwmbase);
 
                     self.xdg_wm_base = Some(xdg_wm_base);
                     if self.xdg_wm_base.is_some() && self.xdg_surface.is_none() {
                         self.init_toplevel(conn);
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             },
-            wl_registry::Event::GlobalRemove { .. } => {}
+            wl_registry::Event::GlobalRemove { .. } => {},
         }
     }
 
-    fn on_xdgsurface(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_xdgsurface(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let xdg_surface = unsafe { self.xdg_surface.as_ref().unwrap_unchecked() };
         // let Some(xdg_surface) = self.xdg_surface.as_ref() else {
         //     return;
         // };
-        match xdg_surface.parse_event(conn, event) {
+        match xdg_surface.parse_event(conn, &event) {
             xdg_surface::Event::Configure { serial } => {
                 xdg_surface.ack_configure(conn, serial);
 
@@ -308,49 +273,39 @@ impl App {
                 }
 
                 if self.window_size_changed {
-                    xdg_surface.set_window_geometry(
-                        conn,
-                        0,
-                        0,
-                        self.window_width,
-                        self.window_height,
-                    );
+                    xdg_surface.set_window_geometry(conn, 0, 0, self.window_width, self.window_height);
                     if let Some(ref viewport) = self.viewport {
-                        viewport.set_destination(
-                            conn,
-                            self.window_width,
-                            self.window_height,
-                        );
+                        viewport.set_destination(conn, self.window_width, self.window_height);
                     }
                     wl_surface.damage_buffer(conn, 0, 0, self.width, self.height);
                     wl_surface.commit(conn);
                     self.window_size_changed = false;
                 }
-            }
+            },
         }
     }
 
-    fn on_wlsurface(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_wlsurface(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let Some(wl_surface) = self.wl_surface.as_ref() else {
             return;
         };
-        match wl_surface.parse_event(conn, event) {
-            _ => {}
+        match wl_surface.parse_event(conn, &event) {
+            _ => {},
         }
     }
 
-    fn on_xdgwmbase(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_xdgwmbase(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let xdg_wm_base = unsafe { self.xdg_wm_base.as_ref().unwrap_unchecked() };
-        match xdg_wm_base.parse_event(conn, event) {
+        match xdg_wm_base.parse_event(conn, &event) {
             xdg_wm_base::Event::Ping { serial } => {
                 xdg_wm_base.pong(conn, serial);
-            }
+            },
         }
     }
 
-    fn on_xdgtoplevel(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_xdgtoplevel(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let xdg_toplevel = unsafe { self.xdg_toplevel.as_ref().unwrap_unchecked() };
-        match xdg_toplevel.parse_event(conn, event) {
+        match xdg_toplevel.parse_event(conn, &event) {
             xdg_toplevel::Event::Configure { width, height, .. } => {
                 if width != 0 && height != 0 {
                     if self.window_width != width || self.window_height != height {
@@ -359,37 +314,35 @@ impl App {
                         self.window_size_changed = true;
                     }
                 }
-            }
+            },
             xdg_toplevel::Event::Close => {
                 self.exit = true;
                 self.cleanup(conn);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
-    fn on_wlbuffer(&mut self, conn: &Connection, event: WlEvent<'_>) {
+    fn on_wlbuffer(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
         let Some(wl_buffer) = self.wl_buffer.as_ref() else {
             return;
         };
-        match wl_buffer.parse_event(conn, event) {
-            wl_buffer::Event::Release => {}
+        match wl_buffer.parse_event(conn, &event) {
+            wl_buffer::Event::Release => {},
         }
     }
 
-    fn init_toplevel(&mut self, conn: &Connection) {
+    fn init_toplevel(&mut self, conn: &mut Connection<Self>) {
         let wl_surface = unsafe { self.wl_surface.as_ref().unwrap_unchecked() };
         let xdg_wm_base = unsafe { self.xdg_wm_base.as_ref().unwrap_unchecked() };
 
         let xdg_surface = xdg_wm_base.get_xdg_surface(conn, wl_surface);
-        self.callbacks.push((xdg_surface.id(), Self::on_xdgsurface));
-
         let xdg_toplevel = xdg_surface.get_toplevel(conn);
-        self.callbacks
-            .push((xdg_toplevel.id(), Self::on_xdgtoplevel));
 
         xdg_toplevel.set_title(conn, "Hola bola");
         xdg_toplevel.set_app_id(conn, "com.github.evillary");
+        xdg_toplevel.set_max_size(conn, 400, 400);
+        xdg_toplevel.set_min_size(conn, 400, 400);
 
         if let Some(ref viewporter) = self.viewporter {
             let viewport = viewporter.get_viewport(conn, wl_surface);
@@ -400,11 +353,14 @@ impl App {
         xdg_surface.set_window_geometry(conn, 0, 0, self.width, self.height);
         wl_surface.commit(conn);
 
+        conn.add_callback(&xdg_surface, Self::on_xdgsurface);
+        conn.add_callback(&xdg_toplevel, Self::on_xdgtoplevel);
+
         self.xdg_toplevel = Some(xdg_toplevel);
         self.xdg_surface = Some(xdg_surface);
     }
 
-    fn init_shm(&mut self, conn: &Connection) {
+    fn init_shm(&mut self, conn: &mut Connection<Self>) {
         self.height = 400;
         self.width = 400;
         self.stride = self.width * 4;
@@ -452,20 +408,27 @@ impl App {
 
         let wl_shm = self.wl_shm.as_ref().unwrap();
         let wl_shm_pool = wl_shm.create_pool(conn, self.shm_fd, self.shm_pool_size);
-        let wl_buffer =
-            wl_shm_pool.create_buffer(conn, 0, self.width, self.height, self.stride, 1);
+        let wl_buffer = wl_shm_pool.create_buffer(conn, 0, self.width, self.height, self.stride, 1);
         // unsafe {
         //     libc::close(self.shm_fd);
         //     self.shm_fd = 0;
         // }
         // wl_shm_pool.destroy(conn);
 
-        self.callbacks.push((wl_buffer.id(), Self::on_wlbuffer));
+        conn.add_callback(&wl_buffer, Self::on_wlbuffer);
         self.wl_shm_pool = Some(wl_shm_pool);
         self.wl_buffer = Some(wl_buffer);
     }
 
-    fn draw(&mut self, conn: &Connection, text: &c_str::CStr) {
+    fn draw(&mut self, conn: &mut Connection<Self>, text: &c_str::CStr) {
+        let Some(wl_buffer) = self.wl_buffer.as_ref() else {
+            return; // this should never be reached
+        };
+
+        let Some(wl_surface) = self.wl_surface.as_ref() else {
+            return;
+        };
+
         unsafe {
             let surface = {
                 let format = cairo::CAIRO_FORMAT_ARGB32;
@@ -492,14 +455,8 @@ impl App {
             // cairo::cairo_stroke(cr);
 
             cairo::cairo_set_line_width(cr, 5.0);
-            cairo::cairo_set_source_rgb(cr, 0.5, 0.1, 0.2);
-            cairo::cairo_rectangle(
-                cr,
-                10.0,
-                10.0,
-                (self.width - 20) as _,
-                (self.height - 20) as _,
-            );
+            cairo::cairo_set_source_rgb(cr, 75.0 / 255.0, 109.0 / 255.0, 145.0 / 255.0);
+            cairo::cairo_rectangle(cr, 10.0, 10.0, (self.width - 20) as _, (self.height - 20) as _);
 
             cairo::cairo_fill(cr);
             // cairo::cairo_stroke(cr);
@@ -507,7 +464,7 @@ impl App {
             // let text = c"هلا".as_ptr();
             let text = text.as_ptr();
             let font = c"Noto Sans".as_ptr();
-            cairo::cairo_set_source_rgb(cr, 0.3, 0.5, 0.6);
+            cairo::cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
             cairo::cairo_select_font_face(
                 cr,
                 font,
@@ -529,20 +486,12 @@ impl App {
             cairo::cairo_destroy(cr);
         }
 
-        let Some(wl_buffer) = self.wl_buffer.as_ref() else {
-            return; // this should never be reached
-        };
-
-        let Some(wl_surface) = self.wl_surface.as_ref() else {
-            return;
-        };
-
         wl_surface.attach(conn, Some(wl_buffer), 0, 0);
         wl_surface.damage_buffer(conn, 0, 0, self.width, self.height);
         wl_surface.commit(conn);
     }
 
-    fn cleanup(&self, conn: &Connection) {
+    fn cleanup(&self, conn: &mut Connection<Self>) {
         unsafe {
             if self.shm_fd != 0 {
                 libc::close(self.shm_fd);

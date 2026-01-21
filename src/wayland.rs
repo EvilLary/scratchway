@@ -19,10 +19,10 @@ pub mod wl_display {
     }
     impl WlDisplay {
         const INTERFACE: &'static str = "wl_display";
-        pub fn sync<S>(&self, conn: &Connection<S>) -> wl_callback::WlCallback {
+        pub fn sync<S>(&self, conn: &mut Connection<S>) -> wl_callback::WlCallback {
+            let new_id = conn.new_id();
             let writer = conn.writer();
             let mut msg = Message::<12>::new(self.id, 0);
-            let new_id = writer.new_id();
             let new_cb = Object::from_id(new_id);
             msg.write_u32(new_id);
             msg.build();
@@ -30,10 +30,10 @@ pub mod wl_display {
             log!(WAYLAND, "wl_display.sync(new {})", new_cb);
             new_cb
         }
-        pub fn get_registry<S>(&self, conn: &Connection<S>) -> wl_registry::WlRegistry {
+        pub fn get_registry<S>(&self, conn: &mut Connection<S>) -> wl_registry::WlRegistry {
+            let new_id = conn.new_id();
             let writer = conn.writer();
             let mut msg = Message::<12>::new(self.id, 1);
-            let new_id = writer.new_id();
             let new_ty = Object::from_id(new_id);
             msg.write_u32(new_id);
             msg.build();
@@ -83,7 +83,7 @@ pub mod wl_display {
         fn interface(&self) -> &'static str {
             self.interface
         }
-        fn parse_event<'a, S>(&self, conn: &Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
+        fn parse_event<'a, S>(&self, conn: &mut Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
             let parser = event.parser();
             match event.header.opcode {
                 0 => {
@@ -124,11 +124,11 @@ pub mod wl_registry {
     impl WlRegistry {
         const INTERFACE: &'static str = "wl_registry";
         pub fn bind<O: Object, S>(
-            &self, conn: &Connection<S>, name: u32, interface: &str, version: u32,
+            &self, conn: &mut Connection<S>, name: u32, interface: &str, version: u32,
         ) -> O {
+            let new_id = conn.new_id();
             let writer = conn.writer();
             let mut msg = Message::<64>::new(self.id, 0);
-            let new_id = writer.new_id();
             msg.write_u32(name);
             msg.write_string(interface);
             msg.write_u32(version);
@@ -182,7 +182,7 @@ pub mod wl_registry {
         fn interface(&self) -> &'static str {
             self.interface
         }
-        fn parse_event<'a, S>(&self, conn: &Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
+        fn parse_event<'a, S>(&self, conn: &mut Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
             let parser = event.parser();
             match event.header.opcode {
                 0 => {
