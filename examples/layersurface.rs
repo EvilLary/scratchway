@@ -6,6 +6,7 @@ use scratchway::wayland::*;
 
 use scr_protocols::{
     single_pixel_buffer_v1::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1,
+    viewporter::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
     wlr_layer_shell_unstable_v1::{
         zwlr_layer_shell_v1::ZwlrLayerShellV1, zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, *,
     },
@@ -18,8 +19,8 @@ fn main() -> std::io::Result<()> {
     let wl_display = conn.display();
     let wl_registry = wl_display.get_registry(&mut conn);
 
-    conn.add_callback(&wl_registry, WaylandState::on_registry_event);
-    conn.add_callback(&wl_display, WaylandState::on_wldisplay_event);
+    wl_registry.set_callback(&mut conn, WaylandState::on_registry_event);
+    wl_display.set_callback(&mut conn, WaylandState::on_wldisplay_event);
 
     let mut state = WaylandState {
         wl_display,
@@ -65,12 +66,12 @@ struct WaylandState {
     wl_display: wl_display::WlDisplay,
     wl_registry: Option<wl_registry::WlRegistry>,
     wl_compositor: Option<wl_compositor::WlCompositor>,
-    // viewporter: Option<WpViewporter>,
+    viewporter: Option<WpViewporter>,
     outputs: Vec<Output>,
     wlr_layer_shell: Option<ZwlrLayerShellV1>,
 
     wl_surface: Option<wl_surface::WlSurface>,
-    // viewport: Option<WpViewport>,
+    viewport: Option<WpViewport>,
     wl_buffer: Option<wl_buffer::WlBuffer>,
     layer_surface: Option<ZwlrLayerSurfaceV1>,
     configured: bool,
@@ -86,8 +87,23 @@ impl WaylandState {
     fn init_layer(&mut self, conn: &mut Connection<Self>, target: Option<String>) {
         let wl_compositor = unsafe { self.wl_compositor.as_ref().unwrap_unchecked() };
 
+        wl_compositor.set_callback(
+            conn,
+            |state: &mut Self, conn: &mut Connection<Self>, event: WlEvent| {},
+        );
+
         let wl_surface = wl_compositor.create_surface(conn);
-        wl_surface.set_callback(conn, Self::on_wlsurface_event);
+        wl_surface.set_callback(
+            conn,
+            |state: &mut Self, conn: &mut Connection<Self>, event: WlEvent| {
+                let Some(wl_surface) = state.wl_surface.as_ref() else {
+                    return;
+                };
+                match wl_surface.parse_event(conn, &event) {
+                    _ => {},
+                }
+            },
+        );
 
         let wl_buffer = unsafe { self.wl_buffer.as_ref().unwrap_unchecked() };
         let wlr_layer_shell = unsafe { self.wlr_layer_shell.as_ref().unwrap_unchecked() };
@@ -113,11 +129,11 @@ impl WaylandState {
         let layer_surface = wlr_layer_shell.get_layer_surface(conn, &wl_surface, None, 2, "crosshair");
         layer_surface.set_callback(conn, Self::on_layersurface_event);
 
-        // if let Some(ref viewporter) = self.viewporter {
-        //     let viewport = viewporter.get_viewport(conn, &wl_surface);
-        //     viewport.set_destination(conn, 500, 100);
-        //     self.viewport = Some(viewport);
-        // }
+        if let Some(ref viewporter) = self.viewporter {
+            let viewport = viewporter.get_viewport(conn, &wl_surface);
+            viewport.set_destination(conn, 500, 100);
+            self.viewport = Some(viewport);
+        }
 
         // 1 = top, 2 = bottom,  4 = left , 8 = right
         let anchor = zwlr_layer_surface_v1::ANCHOR_RIGHT
@@ -168,8 +184,8 @@ impl WaylandState {
                     self.wl_compositor = Some(wl_compositor);
                 },
                 "wp_viewporter" => {
-                    // let viewporter = wl_registry.bind(&conn, name, interface, version);
-                    // self.viewporter = Some(viewporter);
+                    let viewporter = wl_registry.bind(conn, name, interface, version);
+                    self.viewporter = Some(viewporter);
                 },
                 "zwlr_layer_shell_v1" => {
                     let wlr_layer_shell = wl_registry.bind(conn, name, interface, version);
@@ -216,9 +232,9 @@ impl WaylandState {
                 width,
                 height,
             } => {
-                // if let Some(ref viewport) = self.viewport {
-                //     viewport.set_destination(conn, width as i32, height as i32);
-                // }
+                if let Some(ref viewport) = self.viewport {
+                    viewport.set_destination(conn, width as i32, height as i32);
+                }
                 layer_surface.ack_configure(conn, serial);
                 if !self.configured {
                     let Some(wl_surface) = self.wl_surface.as_ref() else {
@@ -235,15 +251,6 @@ impl WaylandState {
             zwlr_layer_surface_v1::Event::Closed => {
                 self.exit = true;
             },
-        }
-    }
-
-    fn on_wlsurface_event(&mut self, conn: &mut Connection<Self>, event: WlEvent) {
-        let Some(wl_surface) = self.wl_surface.as_ref() else {
-            return;
-        };
-        match wl_surface.parse_event(conn, &event) {
-            _ => {},
         }
     }
 

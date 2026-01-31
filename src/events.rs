@@ -133,12 +133,13 @@ impl<'a> EventDataParser<'a> {
 
     pub fn get_string<'b>(&'a self) -> &'b str {
         let str_len = self.get_u32() as usize;
-        if str_len == 0 { // Test this
+        // FIXME
+        if str_len == 0 {
             return "";
         }
         let idx = self.idx.get();
         let data = &self.data[idx..];
-        let padded_len = roundup(str_len, 4);
+        let padded_len = str_len.next_multiple_of(4);
         // Null terminator not included
         let str = &data[..str_len - 1];
         self.idx.replace(idx + padded_len);

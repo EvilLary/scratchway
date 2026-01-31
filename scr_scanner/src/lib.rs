@@ -511,6 +511,12 @@ pub fn generate(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     id: u32,
                     interface: &'static str
                 }
+                impl PartialEq<#object_name> for #object_name {
+                    fn eq(&self, other: &#object_name) -> bool {
+                        self.id == other.id()
+                    }
+                }
+                impl Eq for #object_name {}
                 impl ::std::fmt::Display for #object_name {
                     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                         f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))

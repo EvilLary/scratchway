@@ -92,17 +92,17 @@ impl App {
             wl_seat::Event::Capabilities { capabilities } => {
                 if capabilities & wl_seat::CAPABILITY_POINTER > 0 {
                     let wl_pointer = wl_seat.get_pointer(conn);
-                    wl_pointer.set_callback(
-                        conn,
-                        |state: &mut Self, conn: &mut Connection<Self>, event: WlEvent| {
-                            let wl_pointer = unsafe { state.wl_pointer.as_ref().unwrap_unchecked() };
-                            match wl_pointer.parse_event(conn, &event) {
-                                _ => {},
-                            }
-                        },
-                    );
+
+                    wl_pointer.set_callback(conn, |state, conn, event| {
+                        let wl_pointer = unsafe { state.wl_pointer.as_ref().unwrap_unchecked() };
+                        match wl_pointer.parse_event(conn, &event) {
+                            _ => {},
+                        }
+                    });
+
                     self.wl_pointer = Some(wl_pointer);
                 }
+
                 if capabilities & wl_seat::CAPABILITY_KEYBOARD > 0 {
                     let wl_keyboard = wl_seat.get_keyboard(conn);
                     conn.add_callback(&wl_keyboard, Self::on_wlkeyboard);
@@ -186,9 +186,9 @@ impl App {
                     mods_depressed,
                     mods_latched,
                     mods_locked,
+                    0,
+                    0,
                     group,
-                    0,
-                    0,
                 );
             },
             _ => {},
@@ -263,16 +263,14 @@ impl App {
                 xdg_surface.ack_configure(conn, serial);
 
                 let wl_surface = self.wl_surface.as_ref().unwrap();
+
                 if let Some(ref wl_buffer) = self.wl_buffer
                     && !self.configured
                 {
                     wl_surface.set_input_region(conn, None);
-                    wl_surface.attach(conn, Some(wl_buffer), 0, 0);
-                    wl_surface.commit(conn);
+                    self.draw(conn, c"Press anything");
                     self.configured = true;
-                }
-
-                if self.window_size_changed {
+                } else if self.window_size_changed {
                     xdg_surface.set_window_geometry(conn, 0, 0, self.window_width, self.window_height);
                     if let Some(ref viewport) = self.viewport {
                         viewport.set_destination(conn, self.window_width, self.window_height);
@@ -403,8 +401,6 @@ impl App {
 
         self.shm_fd = shm_fd;
         self.shm_data = shm_pool as *mut u8;
-
-        self.draw(conn, c"Press anything");
 
         let wl_shm = self.wl_shm.as_ref().unwrap();
         let wl_shm_pool = wl_shm.create_pool(conn, self.shm_fd, self.shm_pool_size);

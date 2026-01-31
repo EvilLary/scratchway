@@ -10,7 +10,7 @@ fn main() -> std::io::Result<()> {
 
     registry.set_callback(
         &mut conn,
-        |state: &mut (), conn: &mut Connection<()>, event: WlEvent| {
+        move |state, conn, event| {
             let registry = wl_registry::WlRegistry::from_id(event.header.id);
             let event = registry.parse_event(conn, &event);
             match event {
@@ -28,7 +28,7 @@ fn main() -> std::io::Result<()> {
 
     display.set_callback(
         &mut conn,
-        |state: &mut (), conn: &mut Connection<()>, event: WlEvent| {
+        |state, conn, event| {
             let event = conn.display().parse_event(conn, &event);
             match event {
                 wl_display::Event::Error {
@@ -42,9 +42,9 @@ fn main() -> std::io::Result<()> {
     );
 
     conn.roundtrip(&mut ())?;
-
-    loop {
-        conn.blocking_dispatch(&mut ())?;
-    }
+    //
+    // loop {
+    //     conn.blocking_dispatch(&mut ())?;
+    // }
     Ok(())
 }

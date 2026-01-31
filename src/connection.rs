@@ -3,8 +3,9 @@ use crate::log;
 use crate::wayland::wl_display;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::env;
+use std::path::PathBuf;
 use std::{
-    cell::Cell,
     io,
     marker::PhantomData,
     os::{
@@ -42,26 +43,19 @@ impl<S> Connection<S> {
     pub const WL_DISPLAY_ID: u32 = 1;
 
     pub fn connect() -> std::io::Result<Self> {
-        let wayland_disp =
-            std::env::var_os("WAYLAND_DISPLAY").ok_or(std::io::Error::other("WAYLAND_DISPLAY isn't set"))?;
-
-        let runtime_dir =
-            std::env::var_os("XDG_RUNTIME_DIR").ok_or(std::io::Error::other("XDG_RUNTIME_DIR isn't set"))?;
-
-        let socket = UnixStream::connect(std::path::PathBuf::from(runtime_dir).join(wayland_disp))?;
-
-        let mut object_mgr = ObjectManager {
-            objects: HashMap::new(),
-            dead_ids: Vec::new(),
-            id_counter: IdCounter::new(),
+        let socket_path = {
+            let wayland_disp =
+                env::var_os("WAYLAND_DISPLAY").ok_or(io::Error::other("WAYLAND_DISPLAY isn't set"))?;
+            let runtime_dir =
+                env::var_os("XDG_RUNTIME_DIR").ok_or(io::Error::other("XDG_RUNTIME_DIR isn't set"))?;
+            PathBuf::from(runtime_dir).join(wayland_disp)
         };
-        object_mgr.objects.insert(Self::WL_DISPLAY_ID, None);
 
-        log!(
-            TRACE,
-            "connected to wayland socket at {:?}",
-            socket.peer_addr().unwrap()
-        );
+        let socket = UnixStream::connect(&socket_path)?;
+
+        let object_mgr = ObjectManager::new();
+
+        log!(TRACE, "connected to wayland socket at {:?}", socket_path);
 
         Ok(Self {
             reader: WaylandBuffer::<Reader>::new(socket.as_raw_fd()), // Thanks Rust
@@ -86,36 +80,21 @@ impl<S> Connection<S> {
         }
     }
 
-    fn send_event(&mut self, state: &mut S, event: WlEvent) {
-        if event.header.id == Self::WL_DISPLAY_ID {
-            let _ = self.handle_wldisplay(&event);
-        }
-
-        if let Some(cb) = self.object_mgr.get_callback(event.header.id) {
-            cb(state, self, event);
-        } else {
-            if event.header.id == 1 {
-                println!("DISPLAY_OP: {} - {}", event.header.opcode, event.data.escape_ascii());
-            }
-            log!(WAYLAND, "discarded event for #{}", event.header.id);
-        }
-    }
-
-    fn read_events(&mut self) -> io::Result<()> {
+    pub fn read_events(&mut self) -> io::Result<()> {
         let len = self.reader.recv()?;
         let data = &self.reader.data;
         self.event_queue.extend(EventIter::new(&data[..len]));
         Ok(())
     }
 
-    pub fn blocking_dispatch(&mut self, state: &mut S) -> std::io::Result<()> {
+    pub fn blocking_dispatch(&mut self, state: &mut S) -> io::Result<()> {
         self.flush()?;
         self.read_events()?;
         self.dispatch_events(state);
         Ok(())
     }
 
-    pub fn roundtrip(&mut self, state: &mut S) -> std::io::Result<()> {
+    pub fn roundtrip(&mut self, state: &mut S) -> io::Result<()> {
         self.dispatch_events(state);
 
         let display = self.display();
@@ -136,7 +115,26 @@ impl<S> Connection<S> {
         Ok(())
     }
 
-    fn handle_wldisplay(&mut self, event: &WlEvent) -> std::io::Result<()> {
+    fn send_event(&mut self, state: &mut S, event: WlEvent) {
+        if event.header.id == Self::WL_DISPLAY_ID {
+            let _ = self.handle_wldisplay(&event);
+        }
+
+        if let Some(cb) = self.object_mgr.get_callback(event.header.id) {
+            cb(state, self, event);
+        } else {
+            if event.header.id == 1 {
+                println!(
+                    "DISPLAY_OP: {} - {}",
+                    event.header.opcode,
+                    event.data.escape_ascii()
+                );
+            }
+            log!(WAYLAND, "discarded event for #{}", event.header.id);
+        }
+    }
+
+    fn handle_wldisplay(&mut self, event: &WlEvent) -> io::Result<()> {
         let parser = event.parser();
         match event.header.opcode {
             0 => {}, // TODO
@@ -153,16 +151,18 @@ impl<S> Connection<S> {
         self.writer.send()
     }
 
-    pub fn add_callback(&mut self, object: &impl Object, cb: CallbackFn<S>) {
-        self.object_mgr.set_callback(object.id(), cb);
-    }
-
     pub fn remove_id(&mut self, id: u32) {
         self.object_mgr.remove_id(id);
     }
 
+    #[doc(hidden)]
     pub fn remove_callback(&mut self, id: u32) {
         self.object_mgr.remove_callback(id);
+    }
+
+    #[doc(hidden)]
+    pub fn add_callback(&mut self, object: &impl Object, cb: CallbackFn<S>) {
+        self.object_mgr.set_callback(object.id(), cb);
     }
 
     #[inline(always)]
@@ -184,40 +184,20 @@ impl<S> Connection<S> {
 }
 
 #[derive(Debug)]
-pub(crate) struct IdCounter {
-    pub(crate) current: Cell<u32>,
-}
-
-impl IdCounter {
-    pub(crate) const fn new() -> Self {
-        Self {
-            current: Cell::new(1),
-        }
-    }
-
-    pub(crate) const fn get_new(&self) -> u32 {
-        let new = self.current.get() + 1;
-        self.current.replace(new);
-        new
-    }
-}
-
-unsafe impl Sync for IdCounter {}
-
-#[derive(Debug)]
+#[doc(hidden)]
 pub struct Reader;
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct Writer;
 
 const MAX_BUFFER_SIZE: usize = 4096;
 const MAX_FD_LEN: usize = 12;
 
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct WaylandBuffer<T> {
     pub(crate) data: Bucket<u8, MAX_BUFFER_SIZE>,
-    // FIXME: Use VecDeque
     pub(crate) fds: VecDeque<OwnedFd>,
-    // pub(crate) fds: Bucket<OwnedFd, MAX_FD_LEN>,
     pub(crate) display_fd: RawFd,
     _ghost: PhantomData<T>,
 }
@@ -241,7 +221,7 @@ impl WaylandBuffer<Reader> {
         self.fds.pop_front()
     }
 
-    fn recv(&mut self) -> std::io::Result<usize> {
+    fn recv(&mut self) -> io::Result<usize> {
         let mut ancillary_buf = [0u8; Self::ALIGNED_LEN];
 
         self.fds.clear();
@@ -267,7 +247,6 @@ impl WaylandBuffer<Reader> {
                 &raw mut msghdr,
                 libc::MSG_CMSG_CLOEXEC
             ))?;
-            log!(TRACE, "{:?}", msghdr);
 
             if msghdr.msg_controllen > 0 {
                 // lol this is probably not correct, works tho
@@ -316,7 +295,7 @@ impl WaylandBuffer<Writer> {
         log!(TRACE, "Added fd {} to pool", fd,);
     }
 
-    fn send(&mut self) -> std::io::Result<()> {
+    fn send(&mut self) -> io::Result<()> {
         if self.data.empty() {
             return Ok(());
         }
@@ -394,21 +373,29 @@ impl WaylandBuffer<Writer> {
 
 type CallbackFn<S> = fn(&mut S, &mut Connection<S>, WlEvent);
 
-// TODO: make it actually track ids
 #[allow(unused)]
 #[derive(Debug)]
-pub(crate) struct ObjectManager<S> {
+struct ObjectManager<S> {
     objects: HashMap<u32, Option<CallbackFn<S>>>,
     dead_ids: Vec<u32>,
-    id_counter: IdCounter,
+    next_id: u32,
+    // id_counter: IdCounter,
 }
 
 impl<S> ObjectManager<S> {
+    fn new() -> Self {
+        Self {
+            objects: HashMap::from_iter([(Connection::<S>::WL_DISPLAY_ID, None)]),
+            dead_ids: Vec::new(),
+            next_id: 1,
+        }
+    }
     fn new_id(&mut self) -> u32 {
         let id = if let Some(id) = self.dead_ids.pop() {
             id
         } else {
-            self.id_counter.get_new()
+            self.next_id += 1;
+            self.next_id
         };
         self.objects.insert(id, None);
         id
@@ -437,10 +424,7 @@ impl<S> ObjectManager<S> {
     }
 }
 
-pub trait Object
-where
-    Self: Sized,
-{
+pub trait Object: Sized {
     type Event<'a>;
     fn from_id(id: u32) -> Self;
 
