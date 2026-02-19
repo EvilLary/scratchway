@@ -1,13 +1,20 @@
+#![allow(unused)]
 // Thanks Wayrs -- I hate XML
 // https://github.com/MaxVerevkin/wayrs/tree/main/wayrs-scanner
 
+use quick_xml::events::{BytesStart, Event as XmlEvent};
 use std::fmt;
 use std::str;
-use quick_xml::events::{BytesStart, Event as XmlEvent};
 pub use types::*;
 
 mod types {
+    use proc_macro2::Ident;
+    use quote::quote;
     use std::borrow::Cow;
+
+    use proc_macro2::Span;
+
+    use crate::StrUtils;
 
     #[derive(Debug, Clone)]
     pub struct Protocol<'a> {
@@ -73,16 +80,112 @@ mod types {
         /// Length-prefixed null-terimnated string.
         String { allow_null: bool },
         /// 32-bit unsigned integer referring to an object.
-        Object {
-            allow_null: bool,
-            iface: Option<String>,
-        },
+        Object { allow_null: bool, iface: Option<String> },
         /// 32-bit unsigned integer informing about object creation.
         NewId { iface: Option<String> },
         /// Length-prefixed array.
         Array,
         /// A file descriptor in the ancillary data.
         Fd,
+    }
+
+    impl ArgType {
+        pub fn estimate_size(&self) -> usize {
+            match self {
+                ArgType::Int
+                | ArgType::Uint
+                | ArgType::Enum(_)
+                | ArgType::Fixed
+                | ArgType::NewId { .. }
+                | ArgType::Object { .. } => 4,
+                ArgType::String { .. } | ArgType::Array => 124,
+                ArgType::Fd => 0,
+            }
+        }
+
+        pub fn write_them(&self, arg_idnt: &Ident) -> proc_macro2::TokenStream {
+            match self {
+                ArgType::Int => quote! { __msg.write_i32(#arg_idnt); },
+                ArgType::Uint => quote! { __msg.write_u32(#arg_idnt); },
+                ArgType::Enum(_) => quote! { __msg.write_u32(#arg_idnt.into()); },
+                ArgType::Fixed => quote! { __msg.write_fixed(#arg_idnt); },
+                ArgType::String { .. } => quote! { __msg.write_string(#arg_idnt);},
+                ArgType::Object { allow_null, .. } => {
+                    if *allow_null {
+                        quote!(
+                                __msg.write_u32(#arg_idnt.map_or(0u32, |__o| __o.id()));
+                        )
+                    } else {
+                        quote! {
+                            __msg.write_u32(#arg_idnt.id());
+                        }
+                    }
+                },
+                ArgType::NewId { iface } => {
+                    let iface_mod = iface.as_ref().unwrap();
+                    let iface_struct = Ident::new(&iface_mod.snake_to_pascal(), Span::call_site());
+                    let iface_mod = Ident::new(iface_mod, Span::call_site());
+
+                    quote! {
+                        let #arg_idnt = conn.create_new_object::<#iface_mod::#iface_struct>(None, self.version);
+                        __msg.write_u32(#arg_idnt.id());
+                    }
+                },
+                ArgType::Array => quote! { todo!() },
+                ArgType::Fd => quote! { conn.add_fd(#arg_idnt); },
+            }
+        }
+
+        pub fn as_rust_type(&self, lifetime: bool) -> Option<proc_macro2::TokenStream> {
+            match self {
+                ArgType::Int => Some(quote! { i32 }),
+                ArgType::Uint => Some(quote! { u32 }),
+                ArgType::Enum(name) => {
+                    let ff = name.split_once('.');
+                    if ff.is_none() {
+                        let enom = Ident::new(&name.snake_to_pascal(), Span::call_site());
+                        return Some(quote! { #enom });
+                    }
+                    let (mod_name, enom) = ff.unwrap();
+                    let mod_name = Ident::new(mod_name, Span::call_site());
+                    let enom = Ident::new(&enom.snake_to_pascal(), Span::call_site());
+                    Some(quote! { #mod_name::#enom })
+                },
+                ArgType::Fixed => Some(quote! { f32 }),
+                ArgType::String { .. } => {
+                    if lifetime {
+                        Some(quote! { &'a str })
+                    } else {
+                        Some(quote! { &str })
+                    }
+                },
+                ArgType::Object { allow_null, iface } => {
+                    let iface_mod = iface.as_ref().unwrap();
+                    let iface_struct = Ident::new(&iface_mod.snake_to_pascal(), Span::call_site());
+                    let iface_mod = Ident::new(iface_mod, Span::call_site());
+                    let mut name = quote!{ #iface_mod::#iface_struct };
+
+                    if !lifetime {
+                        name = quote!{ &#name };
+                    }
+
+                    if *allow_null{
+                        Some(quote! { Option<#name> })
+                    } else {
+                        Some(quote! { #name })
+                    }
+                },
+                ArgType::NewId { .. } => None,
+                ArgType::Array => {
+                    if lifetime {
+                        Some(quote!(&'a [u8]))
+                    } else {
+                        Some(quote!(&[u8]))
+                    }
+                },
+                ArgType::Fd => Some(quote!(::std::os::fd::OwnedFd)),
+            }
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -178,11 +281,11 @@ impl<'a> Parser<'a> {
                 XmlEvent::Start(start) => match start.name().as_ref() {
                     b"description" => {
                         protocol.description = Some(self.parse_description(start, true)?);
-                    }
+                    },
                     b"interface" => protocol.interfaces.push(self.parse_interface(start)?),
                     b"copyright" => {
                         // TODO?
-                    }
+                    },
                     other => return Err(Error::UnexpectedTag(str::from_utf8(other)?.into())),
                 },
                 XmlEvent::End(end) if end.name() == tag.name() => break,
@@ -218,7 +321,7 @@ impl<'a> Parser<'a> {
                 XmlEvent::Start(start) => match start.name().as_ref() {
                     b"description" => {
                         interface.description = Some(self.parse_description(start, true)?);
-                    }
+                    },
                     b"request" => interface.requests.push(self.parse_message(start)?),
                     b"event" => interface.events.push(self.parse_message(start)?),
                     b"enum" => interface.enums.push(self.parse_enum(start)?),
@@ -244,9 +347,7 @@ impl<'a> Parser<'a> {
                 b"name" => name = Some(attr.unescape_value()?.into_owned()),
                 b"type" => kind = Some(attr.unescape_value()?.into_owned()),
                 b"since" => since = attr.unescape_value()?.parse().unwrap(),
-                b"deprecated-since" => {
-                    deprecated_since = Some(attr.unescape_value()?.parse().unwrap())
-                }
+                b"deprecated-since" => deprecated_since = Some(attr.unescape_value()?.parse().unwrap()),
                 _ => (),
             }
         }
@@ -264,16 +365,14 @@ impl<'a> Parser<'a> {
             match self.reader.read_event()? {
                 XmlEvent::Eof => return Err(Error::UnexpectedEof),
                 XmlEvent::Start(start) => match start.name().as_ref() {
-                    b"description" => {
-                        message.description = Some(self.parse_description(start, true)?)
-                    }
+                    b"description" => message.description = Some(self.parse_description(start, true)?),
                     other => return Err(Error::UnexpectedTag(str::from_utf8(other)?.into())),
                 },
                 XmlEvent::Empty(empty) => match empty.name().as_ref() {
                     b"arg" => message.args.push(Self::parse_arg(empty)?),
                     b"description" => {
                         message.description = Some(self.parse_description(empty, false)?);
-                    }
+                    },
                     other => return Err(Error::UnexpectedTag(str::from_utf8(other)?.into())),
                 },
                 XmlEvent::End(end) if end.name() == tag.name() => break,
@@ -336,7 +435,7 @@ impl<'a> Parser<'a> {
                     XmlEvent::Text(text) => {
                         let f = core::str::from_utf8(text.as_ref()).unwrap().to_owned();
                         description.text = Some(std::borrow::Cow::Owned(f));
-                    }
+                    },
                     XmlEvent::End(end) if end.name() == tag.name() => break,
                     _ => (),
                 }
@@ -369,10 +468,7 @@ impl<'a> Parser<'a> {
 
         Ok(Argument {
             name: name.ok_or(Error::MissingAttribute("arg.name"))?,
-            arg_type: match arg_type
-                .ok_or(Error::MissingAttribute("arg.type"))?
-                .as_str()
-            {
+            arg_type: match arg_type.ok_or(Error::MissingAttribute("arg.type"))?.as_str() {
                 "int" | "uint" if enum_ty.is_some() => ArgType::Enum(enum_ty.unwrap()),
                 "int" => ArgType::Int,
                 "uint" => ArgType::Uint,
@@ -388,9 +484,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_enum_item(
-        &mut self, arg: BytesStart<'a>, non_empty_tag: bool,
-    ) -> Result<EnumItem, Error> {
+    fn parse_enum_item(&mut self, arg: BytesStart<'a>, non_empty_tag: bool) -> Result<EnumItem, Error> {
         let mut name = None;
         let mut value = None;
         let mut summary = None;

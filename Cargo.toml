@@ -11,6 +11,7 @@ version = "0.1.1"
 edition = "2024"
 
 [dependencies]
+bitflags = "2.10.0"
 libc = { version = "0.2", features = ["extra_traits"] }
 scr_scanner = { path = "./scr_scanner" }
 

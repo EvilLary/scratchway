@@ -1,11 +1,14 @@
 #![allow(unused)]
 
-use std::mem::MaybeUninit;
+use core::{
+    mem::{self, MaybeUninit},
+    ptr, slice,
+};
 
 // Pretty much a copy-cat of rust's Vec
 #[derive(Debug)]
 pub struct Bucket<T, const S: usize> {
-    data: MaybeUninit<[T; S]>, // FIXME: MaybeUninit on inner
+    data: MaybeUninit<[T; S]>,
     len: usize,
 }
 
@@ -13,12 +16,6 @@ impl<T, const S: usize> Bucket<T, S> {
     pub const fn new() -> Self {
         let data = MaybeUninit::uninit();
         Self { data, len: 0 }
-    }
-
-    pub const fn full() -> Self {
-        let mut me = Self::new();
-        me.len = S;
-        me
     }
 
     #[inline]
@@ -43,11 +40,12 @@ impl<T, const S: usize> Bucket<T, S> {
         S
     }
 
+    // see `Vec`.clear
     pub fn clear(&mut self) {
-        // see `Vec`.clear
-        let elems = self.as_slice_mut();
         unsafe {
-            core::ptr::drop_in_place(elems);
+            // drop_in_place already checks T needs drop
+            let elems = self.as_slice_mut();
+            ptr::drop_in_place(elems);
         }
         self.len = 0;
     }
@@ -61,10 +59,10 @@ impl<T, const S: usize> Bucket<T, S> {
         self.len = len;
     }
 
-    pub fn push(&mut self, item: T) {
+    pub const fn push(&mut self, item: T) {
         debug_assert!(self.len < S);
         unsafe {
-            core::ptr::write(self.as_mut_ptr().add(self.len), item);
+            ptr::write(self.as_mut_ptr().add(self.len), item);
             self.len += 1;
         }
     }
@@ -74,14 +72,33 @@ impl<T, const S: usize> Bucket<T, S> {
             return None;
         }
         self.len -= 1;
-        unsafe { Some(core::ptr::read(self.as_ptr().add(self.len))) }
+        unsafe { Some(ptr::read(self.as_ptr().add(self.len))) }
     }
 
     #[inline]
-    pub const fn empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    pub fn align_to(&mut self, align: usize, value: T)
+    where
+        T: Copy,
+    {
+        let padded_len = self.len.next_multiple_of(align);
+        debug_assert!(padded_len <= self.capacity());
+
+        if padded_len == self.len || padded_len >= S {
+            return;
+        }
+
+        let start = self.len;
+        let end = padded_len;
+
+        unsafe { self.data_mut()[start..end].fill(value) }
+        self.len = padded_len;
+    }
+
+    /// Returns the entire underlaying buffer
     #[inline]
     const unsafe fn data(&self) -> &[T; S] {
         unsafe { self.data.as_ptr().as_ref().unwrap_unchecked() }
@@ -107,27 +124,35 @@ impl<T, const S: usize> Bucket<T, S> {
         T: Copy,
     {
         let slice = slice.as_ref();
-        if (!self.can_fit(slice.len())) {
-            panic!("Provided slice is larger than the available space");
+        let slice_len = slice.len();
+
+        if (!self.can_fit(slice_len)) {
+            panic!(
+                "Provided slice is larger than the available space, {{ self: {} slice: {} }}",
+                self.len,
+                slice.len()
+            );
         }
+
         let begin = self.len;
-        let end = slice.len() + begin;
+        let end = begin + slice_len;
         unsafe { self.data_mut()[begin..end].copy_from_slice(slice) };
-        self.len += slice.len();
+
+        self.len += slice_len;
     }
 
     #[inline]
-    pub fn fill(&mut self, item: T)
+    pub const fn fill(&mut self, item: T)
     where
         T: Copy,
     {
-        unsafe { self.data_mut().fill(item) }
+        // .fill isn't const
+        unsafe { self.data_mut().copy_from_slice(&[item; S]) }
+        self.len = S;
     }
 
     pub const unsafe fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            core::slice::from_raw_parts(self.as_ptr() as *const u8, self.len * size_of::<T>())
-        }
+        unsafe { slice::from_raw_parts(self.as_ptr() as *const u8, self.len * size_of::<T>()) }
     }
 }
 
@@ -151,13 +176,13 @@ impl<T, const S: usize> AsMut<[T]> for Bucket<T, S> {
 
 macro_rules! impl_index {
     ($som:ty, $out:ty) => {
-        impl<T, const S: usize> std::ops::Index<$som> for Bucket<T, S> {
+        impl<T, const S: usize> core::ops::Index<$som> for Bucket<T, S> {
             type Output = $out;
             fn index(&self, index: $som) -> &Self::Output {
                 &self.as_slice()[index]
             }
         }
-        impl<T, const S: usize> std::ops::IndexMut<$som> for Bucket<T, S> {
+        impl<T, const S: usize> core::ops::IndexMut<$som> for Bucket<T, S> {
             fn index_mut(&mut self, index: $som) -> &mut Self::Output {
                 &mut self.as_slice_mut()[index]
             }
@@ -166,10 +191,11 @@ macro_rules! impl_index {
 }
 
 impl_index!(usize, T);
-impl_index!(std::ops::RangeTo<usize>, [T]);
-impl_index!(std::ops::RangeInclusive<usize>, [T]);
-impl_index!(std::ops::RangeFull, [T]);
-impl_index!(std::ops::RangeToInclusive<usize>, [T]);
+impl_index!(core::ops::Range<usize>, [T]);
+impl_index!(core::ops::RangeTo<usize>, [T]);
+impl_index!(core::ops::RangeInclusive<usize>, [T]);
+impl_index!(core::ops::RangeFull, [T]);
+impl_index!(core::ops::RangeToInclusive<usize>, [T]);
 
 macro_rules! syscall {
     ($fn:expr) => {{
@@ -180,7 +206,6 @@ macro_rules! syscall {
             Ok(ret)
         }
     }};
-    () => {};
 }
 pub(crate) use syscall;
 
@@ -195,20 +220,20 @@ macro_rules! log {
     (DEBUG, $($arg:tt)*) => {{
         eprintln!("[\x1b[34mDEBUG\x1b[0m]: {}", format_args!($($arg)*));
     }};
-    (TRACE, $($arg:tt)*) => {{
-        if *$crate::connection::TRACE {
-            eprintln!("[\x1b[36mTRACE\x1b[0m]: {}", format_args!($($arg)*));
+    (TRACE, $($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        {
+            if *$crate::connection::TRACE {
+                eprintln!("[\x1b[36mTRACE\x1b[0m]: {}", format_args!($($arg)*));
+            }
         }
-    }};
+    };
     (WARNING, $($arg:tt)*) => {{
         eprintln!("[\x1b[33mWARNING\x1b[0m]: {}", format_args!($($arg)*));
     }};
-    (WAYLAND, $($arg:tt)*) => {{
-        if *$crate::connection::DEBUG {
-            eprintln!("[\x1b[35mWAYLAND-DEBUG\x1b[0m]: {}", format_args!($($arg)*));
-        }
-    }};
-    () => {};
+    (WAYLAND, $($arg:tt)*) => {
+        eprintln!("[\x1b[35mWAYLAND-DEBUG\x1b[0m]: {}", format_args!($($arg)*));
+    };
 }
 
 #[cfg(test)]

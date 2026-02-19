@@ -1,57 +1,96 @@
 #![allow(unused)]
+use crate::{Connection, Listener, WlInterface, WlProxy, connection::wire::*, log, objects::Interface};
 
-use crate::connection::{Reader, WaylandBuffer, Writer};
-use crate::events::*;
-use crate::log;
-use crate::prelude::*;
-
+pub use wl_display::WlDisplay;
 pub mod wl_display {
     use super::*;
 
+    #[derive(Clone, Copy)]
     pub struct WlDisplay {
-        pub(crate) id: u32,
-        pub(crate) interface: &'static str,
+        id: u32,
+        version: u32,
     }
+
+    impl PartialEq for WlDisplay {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id
+        }
+    }
+
+    impl ::core::cmp::Eq for WlDisplay {}
+
     impl Default for WlDisplay {
         fn default() -> Self {
-            Object::from_id(1)
+            Self {
+                id: 1,
+                version: Self::INTERFACE.version,
+            }
         }
     }
+
     impl WlDisplay {
-        const INTERFACE: &'static str = "wl_display";
-        pub fn sync<S>(&self, conn: &mut Connection<S>) -> wl_callback::WlCallback {
-            let new_id = conn.new_id();
-            let writer = conn.writer();
+        pub const INTERFACE: &'static Interface = &Interface {
+            name: "wl_display",
+            version: 1,
+            events: &["error", "delete_id"],
+            requests: &["sync", "get_registry"],
+        };
+    }
+
+    impl WlDisplay {
+        pub(crate) fn sync<S>(&self, conn: &mut Connection<S>) -> WlCallback {
+            let callback = conn.deaf_wlinterface(None, 1);
             let mut msg = Message::<12>::new(self.id, 0);
-            let new_cb = Object::from_id(new_id);
-            msg.write_u32(new_id);
+            msg.write_u32(<WlCallback as WlInterface>::id(&callback));
             msg.build();
-            writer.write_request(msg.data());
-            log!(WAYLAND, "wl_display.sync(new {})", new_cb);
-            new_cb
+            conn.write_request(msg.data());
+            if conn.debug {
+                log!(WAYLAND, "wl_display.sync(new {:?})", callback);
+            }
+            callback
         }
-        pub fn get_registry<S>(&self, conn: &mut Connection<S>) -> wl_registry::WlRegistry {
-            let new_id = conn.new_id();
-            let writer = conn.writer();
-            let mut msg = Message::<12>::new(self.id, 1);
-            let new_ty = Object::from_id(new_id);
-            msg.write_u32(new_id);
+
+        // Maybe expand on this approach?
+        pub(crate) fn get_registry_deaf<S>(&self, conn: &mut Connection<S>) -> wl_registry::WlRegistry {
+            let new_object = conn.deaf_wlinterface(None, self.version);
+            let mut msg = Message::<12>::new(self.id, 1u16);
+            msg.write_u32(<wl_registry::WlRegistry as WlInterface>::id(&new_object));
             msg.build();
-            writer.write_request(msg.data());
-            log!(WAYLAND, "wl_display.get_registry(new {})", new_ty);
-            new_ty
+            conn.write_request(msg.data());
+            if conn.debug {
+                log!(WAYLAND, "wl_display.get_registry(new {:?})", new_object);
+            }
+            new_object
+        }
+
+        pub(crate) fn get_registry<S>(&self, conn: &mut Connection<S>) -> wl_registry::WlRegistry
+        where
+            S: Listener<WlRegistry>,
+        {
+            let new_object = conn.create_new_object(None, self.version);
+            let mut msg = Message::<12>::new(self.id, 1u16);
+            msg.write_u32(<wl_registry::WlRegistry as WlInterface>::id(&new_object));
+            msg.build();
+            conn.write_request(msg.data());
+            if conn.debug {
+                log!(WAYLAND, "wl_display.get_registry(new {:?})", new_object);
+            }
+            new_object
         }
     }
-    impl ::std::fmt::Display for WlDisplay {
-        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
-        }
-    }
+
     impl ::std::fmt::Debug for WlDisplay {
         fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
+            f.write_fmt(format_args!("{}#{}", WlDisplay::INTERFACE.name, self.id))
         }
     }
+
+    impl ::std::fmt::Display for WlDisplay {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            f.write_fmt(format_args!("{}#{}", WlDisplay::INTERFACE.name, self.id))
+        }
+    }
+
     #[derive(Debug)]
     pub enum Event<'a> {
         Error {
@@ -63,100 +102,135 @@ pub mod wl_display {
             id: u32,
         },
     }
+
     pub enum Error {
         InvalidObject = 0,
         InvalidMethod = 1,
         NoMemory = 2,
         Implementation = 3,
     }
-    impl Object for WlDisplay {
+
+    impl WlInterface for WlDisplay {
         type Event<'a> = Event<'a>;
-        fn from_id(id: u32) -> Self {
+
+        fn from_proxy(wl_proxy: WlProxy) -> Self {
             Self {
-                id,
-                interface: Self::INTERFACE,
+                id: wl_proxy.id,
+                version: wl_proxy.version,
             }
         }
+
         fn id(&self) -> u32 {
             self.id
         }
-        fn interface(&self) -> &'static str {
-            self.interface
+
+        fn version(&self) -> u32 {
+            self.version
         }
-        fn parse_event<'a, S>(&self, conn: &mut Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
+
+        fn parse_event<'a, S>(&self, conn: &mut Connection<S>, event: &'a WlEvent) -> Event<'a> {
             let parser = event.parser();
             match event.header.opcode {
                 0 => {
                     let object_id = parser.get_u32();
                     let code = parser.get_u32();
                     let message = parser.get_string();
-                    log!(
-                        WAYLAND,
-                        "==> wl_display.error({}, {}, {})",
-                        object_id,
-                        code,
-                        message
-                    );
-                    Self::Event::Error {
+                    // log!(
+                    //     WAYLAND,
+                    //     conn.debug,
+                    //     "==> wl_display.error({}, {}, {})",
+                    //     object_id,
+                    //     code,
+                    //     message
+                    // );
+                    Event::Error {
                         object_id,
                         code,
                         message,
                     }
-                }
+                },
                 1 => {
                     let id = parser.get_u32();
-                    log!(WAYLAND, "==> wl_display.delete_id({})", id);
-                    Self::Event::DeleteId { id }
-                }
+                    // if conn.debug {
+                    //     log!(WAYLAND, "==> wl_display.delete_id({})", id);
+                    // }
+                    Event::DeleteId { id }
+                },
                 _ => unreachable!(),
             }
+        }
+
+        fn interface() -> &'static Interface {
+            Self::INTERFACE
         }
     }
 }
 
+pub use wl_registry::WlRegistry;
 pub mod wl_registry {
     use super::*;
 
+    #[derive(Clone, Copy)]
     pub struct WlRegistry {
-        pub(crate) id: u32,
-        pub(crate) interface: &'static str,
+        id: u32,
+        version: u32,
     }
+
     impl WlRegistry {
-        const INTERFACE: &'static str = "wl_registry";
-        pub fn bind<O: Object, S>(
-            &self, conn: &mut Connection<S>, name: u32, interface: &str, version: u32,
-        ) -> O {
-            let new_id = conn.new_id();
-            let writer = conn.writer();
-            let mut msg = Message::<64>::new(self.id, 0);
+        pub const INTERFACE: &'static Interface = &Interface {
+            name: "wl_registry",
+            version: 1,
+            events: &["global", "global_remove"],
+            requests: &["bind"],
+        };
+
+        pub fn bind<I, S>(&self, conn: &mut Connection<S>, name: u32, version: u32) -> I
+        where
+            I: WlInterface,
+            S: Listener<I>,
+        {
+            let new_object = conn.create_new_object::<I>(None, version);
+            let mut msg = Message::<96>::new(self.id, 0);
             msg.write_u32(name);
-            msg.write_string(interface);
+            msg.write_string(I::interface().name);
             msg.write_u32(version);
-            msg.write_u32(new_id);
+            msg.write_u32(<I as WlInterface>::id(&new_object));
             msg.build();
-            writer.write_request(msg.data());
-            log!(
-                WAYLAND,
-                "{}.bind(new {}#{}, {}, {})",
-                self,
-                interface,
-                new_id,
-                name,
-                version
-            );
-            Object::from_id(new_id)
+            conn.write_request(msg.data());
+            if conn.debug {
+                log!(
+                    WAYLAND,
+                    "{:?}.bind(new {:?}, {}, {})",
+                    self,
+                    new_object,
+                    name,
+                    version
+                );
+            }
+            new_object
         }
     }
-    impl ::std::fmt::Display for WlRegistry {
-        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
-        }
-    }
+
     impl ::std::fmt::Debug for WlRegistry {
         fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-            f.write_fmt(format_args!("{}#{}", Self::INTERFACE, self.id))
+            f.write_fmt(format_args!("{}#{}", WlRegistry::INTERFACE.name, self.id))
         }
     }
+
+    impl ::std::fmt::Display for WlRegistry {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            f.write_fmt(format_args!("{}#{}", WlRegistry::INTERFACE.name, self.id))
+        }
+    }
+
+    impl PartialEq for WlRegistry {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id
+        }
+    }
+
+    impl ::core::cmp::Eq for WlRegistry {}
+
     #[derive(Debug)]
     pub enum Event<'a> {
         Global {
@@ -168,20 +242,29 @@ pub mod wl_registry {
             name: u32,
         },
     }
-    impl Object for WlRegistry {
+
+    impl WlInterface for WlRegistry {
         type Event<'a> = Event<'a>;
-        fn from_id(id: u32) -> Self {
+
+        fn interface() -> &'static Interface {
+            Self::INTERFACE
+        }
+
+        fn from_proxy(wl_proxy: WlProxy) -> Self {
             Self {
-                id,
-                interface: Self::INTERFACE,
+                id: wl_proxy.id,
+                version: wl_proxy.version,
             }
         }
+
         fn id(&self) -> u32 {
             self.id
         }
-        fn interface(&self) -> &'static str {
-            self.interface
+
+        fn version(&self) -> u32 {
+            self.version
         }
+
         fn parse_event<'a, S>(&self, conn: &mut Connection<S>, event: &'a WlEvent) -> Self::Event<'a> {
             let parser = event.parser();
             match event.header.opcode {
@@ -189,25 +272,26 @@ pub mod wl_registry {
                     let name = parser.get_u32();
                     let interface = parser.get_string();
                     let version = parser.get_u32();
-                    log!(
-                        WAYLAND,
-                        "==> {}.global({}, {}, {})",
-                        self,
-                        name,
-                        interface,
-                        version
-                    );
+                    // log!(
+                    //     WAYLAND,
+                    //     conn.debug,
+                    //     "==> {:?}.global({}, {}, {})",
+                    //     self,
+                    //     name,
+                    //     interface,
+                    //     version
+                    // );
                     Self::Event::Global {
                         name,
                         interface,
                         version,
                     }
-                }
+                },
                 1 => {
                     let name = parser.get_u32();
-                    log!(WAYLAND, "==> {}.global_remove({})", self, name);
+                    // log!(WAYLAND, conn.debug, "==> {:?}.global_remove({})", self, name);
                     Self::Event::GlobalRemove { name }
-                }
+                },
                 _ => unreachable!(),
             }
         }

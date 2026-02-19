@@ -1,14 +1,14 @@
+use crate::log;
+use crate::utils::Bucket;
 use std::cell::Cell;
 
-use crate::log;
-
 #[derive(Debug, Clone, Copy)]
-pub struct EventIter<'a> {
+pub(crate) struct EventIter<'a> {
     buf: &'a [u8],
 }
 
 impl<'a> EventIter<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
+    pub(crate) fn new(buf: &'a [u8]) -> Self {
         Self { buf }
     }
 }
@@ -23,16 +23,17 @@ impl<'a> Iterator for EventIter<'a> {
         let header = &self.buf[0..Header::HEADER_SIZE];
         let header = Header::from_slice(header);
 
-        // FIXME: Implement some mechanism to keep old data there
         if self.buf.len() < header.size as usize {
-            eprintln!(
-                "[\x1b[32mERROR\x1b[0m]: Recieived buffer is less than advertised size in the header: {:?},
+            log!(
+                ERR,
+                "Recieived buffer is less than advertised size in the header: {:?},
                 discarding the entire buffer",
                 header
             );
             return None;
         }
 
+        // TODO: find a way to recover from this?
         let Some(data) = self.buf.get(Header::HEADER_SIZE..header.size as usize) else {
             log!(
                 ERR,
@@ -58,10 +59,11 @@ impl<'a> Iterator for EventIter<'a> {
 #[derive(Debug)]
 pub struct WlEvent {
     pub header: Header,
-    pub data: Vec<u8>,
+    pub data: Box<[u8]>,
 }
 
 impl WlEvent {
+    #[doc(hidden)]
     pub fn parser(&self) -> EventDataParser<'_> {
         EventDataParser::new(self.data.as_ref())
     }
@@ -77,29 +79,25 @@ pub struct Header {
 
 impl Header {
     pub const HEADER_SIZE: usize = size_of::<Self>();
-    pub fn new(id: u32, opcode: u16, size: u16) -> Self {
-        Self { id, opcode, size }
-    }
-    pub fn from_slice(slice: &[u8]) -> Self {
+
+    fn from_slice(slice: &[u8]) -> Self {
         debug_assert_eq!(slice.len(), std::mem::size_of::<Self>());
         // Safety: We've already asserted slice length
         // The safe ugly way is not different from using transmute
         unsafe {
-            core::mem::transmute_copy::<[u8; Self::HEADER_SIZE], Self>(
-                &slice.try_into().unwrap_unchecked(),
-            )
+            core::mem::transmute_copy::<[u8; Self::HEADER_SIZE], Self>(&slice.try_into().unwrap_unchecked())
         }
     }
 }
 
-// #[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
 pub struct EventDataParser<'a> {
-    pub data: &'a [u8],
+    data: &'a [u8],
     idx: Cell<usize>,
 }
 
 impl<'a> EventDataParser<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
+    pub const fn new(data: &'a [u8]) -> Self {
         Self {
             data,
             idx: Cell::new(0),
@@ -110,7 +108,7 @@ impl<'a> EventDataParser<'a> {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let num = u16::from_ne_bytes([data[0], data[1]]);
-        self.idx.replace(idx + core::mem::size_of::<u16>());
+        self.idx.replace(idx + size_of::<u16>());
         num
     }
 
@@ -118,16 +116,15 @@ impl<'a> EventDataParser<'a> {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f32;
-        self.idx.replace(idx + core::mem::size_of::<i32>());
+        self.idx.replace(idx + size_of::<i32>());
         num / 256.0
     }
 
     pub fn get_u32(&self) -> u32 {
         let idx = self.idx.get();
         let data = &self.data[idx..];
-        // let num = u32::from_ne_bytes(data[0..4]);
         let num = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
-        self.idx.replace(idx + core::mem::size_of::<u32>());
+        self.idx.replace(idx + size_of::<u32>());
         num
     }
 
@@ -144,7 +141,6 @@ impl<'a> EventDataParser<'a> {
         let str = &data[..str_len - 1];
         self.idx.replace(idx + padded_len);
 
-        // FIXME: This should be removed once migrating to a dipatcher model is done
         // SAFETY: the reference behind message is valid for as long
         // as the event.data is valid, Rust just can't know it
         unsafe {
@@ -155,13 +151,14 @@ impl<'a> EventDataParser<'a> {
         }
     }
 
-    pub fn get_array<'b>(&'a self) -> &'b [u32] {
+    pub fn get_array<'b>(&'a self) -> &'b [u8] {
+        // This is wrong lol
         let array_len = self.get_u32() as usize;
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let array = unsafe {
             let ptr = data[..array_len].as_ptr().cast();
-            core::slice::from_raw_parts(ptr, array_len / size_of::<u32>())
+            core::slice::from_raw_parts(ptr, array_len)
         };
         self.idx.replace(idx + array_len);
         array
@@ -171,85 +168,70 @@ impl<'a> EventDataParser<'a> {
         let idx = self.idx.get();
         let data = &self.data[idx..];
         let num = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
-        self.idx.replace(idx + core::mem::size_of::<u32>());
+        self.idx.replace(idx + size_of::<u32>());
         num
     }
 }
 
-fn roundup(value: usize, mul: usize) -> usize {
-    (((value - 1) / mul) + 1) * mul
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[doc(hidden)]
 pub struct Message<const S: usize> {
-    buf: [u8; S],
-    len: usize,
+    buf: Bucket<u8, S>,
 }
 
+#[doc(hidden)]
 impl<const S: usize> Message<S> {
     pub fn new(id: u32, op: u16) -> Self {
         let mut msg = Message::empty();
-        msg.write_u32(id).write_u16(op).write_u16(8);
+        msg.write_u32(id);
+        msg.write_u16(op);
+        msg.write_u16(8);
         msg
     }
 
-    pub fn build(&mut self) {
-        self.buf[6..8].copy_from_slice(&(self.len as u16).to_ne_bytes());
-    }
-
     fn empty() -> Self {
-        Self {
-            buf: [0; S],
-            len: 0,
-        }
+        Self { buf: Bucket::new() }
     }
 
-    pub fn write_i32(&mut self, value: i32) -> &mut Self {
-        const SIZE: usize = size_of::<i32>();
-        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
-        self.len += SIZE;
-        self
+    pub fn build(&mut self) {
+        debug_assert!(self.buf.len().is_multiple_of(4));
+        let len = self.buf.len() as u16;
+        self.buf[6..8].copy_from_slice(&len.to_ne_bytes());
     }
 
-    pub fn write_u32(&mut self, value: u32) -> &mut Self {
-        const SIZE: usize = size_of::<u32>();
-        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
-        self.len += SIZE;
-        self
+    pub fn write_i32(&mut self, value: i32) {
+        self.buf.extend_from_slice(value.to_ne_bytes());
+    }
+
+    pub fn write_u32(&mut self, value: u32) {
+        self.buf.extend_from_slice(value.to_ne_bytes());
     }
 
     // TODO: Does this actually work??
-    pub fn write_fixed(&mut self, value: f32) -> &mut Self {
+    pub fn write_fixed(&mut self, value: f32) {
         let wl_fixed = f32::to_bits((value * 256.0).round());
         self.write_u32(wl_fixed);
-        self
     }
 
-    pub fn write_u16(&mut self, value: u16) -> &mut Self {
-        const SIZE: usize = size_of::<u16>();
-        self.buf[self.len..self.len + SIZE].copy_from_slice(&value.to_ne_bytes());
-        self.len += SIZE;
-        self
+    pub fn write_u16(&mut self, value: u16) {
+        self.buf.extend_from_slice(value.to_ne_bytes());
     }
 
-    pub fn write_string(&mut self, str: impl AsRef<str>) -> &mut Self {
+    pub fn write_string(&mut self, str: impl AsRef<str>) {
         let str = str.as_ref();
-        if str.is_empty() { // TODO: test this
+        if str.is_empty() {
+            // TODO: test this
             self.write_u32(0);
-            return self;
+            return;
         }
-        // null included
-        self.write_u32((str.len() + 1) as u32);
-        self.buf[self.len..str.len() + self.len].copy_from_slice(str.as_bytes());
-        self.len += roundup(str.len() + 1, 4);
-        self
-    }
-
-    pub fn data_mut(&mut self) -> &mut [u8] {
-        &mut self.buf[..self.len]
+        let cstr_len = str.len() + 1;
+        self.write_u32(cstr_len as u32);
+        self.buf.extend_from_slice(str);
+        self.buf.extend_from_slice([0]);
+        self.buf.align_to(4, 0u8);
     }
 
     pub fn data(&self) -> &[u8] {
-        &self.buf[..self.len]
+        self.buf.as_ref()
     }
 }

@@ -1,12 +1,12 @@
 #![allow(internal_features)]
 
-pub mod connection;
-pub mod events;
 pub mod wayland;
 
-pub mod prelude {
-    pub use crate::connection::{Connection, Object};
-    pub use crate::events::WlEvent;
-}
+pub mod connection;
+mod objects;
+
+pub use connection::wire;
+pub use connection::{Connection, Global};
+pub use objects::{Listener, WlInterface, WlProxy, Interface};
 
 mod utils;

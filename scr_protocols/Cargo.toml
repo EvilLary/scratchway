@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 scratchway = { path = "../" }
 scr_scanner = { path = "../scr_scanner" }
+bitflags = "2.10.0"
